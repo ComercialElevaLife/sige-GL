@@ -158,6 +158,15 @@ const userCompaniesLabel = (user, clients) => {
   const names = clientIdsFor(user).map((id) => nameOf(clients, id)).filter((name) => name !== "—");
   return names.join(", ") || "Empresa não definida";
 };
+const certificateFor = async (payload) => {
+  const source = JSON.stringify(payload);
+  if (crypto?.subtle && window.TextEncoder) {
+    const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(source));
+    const hash = [...new Uint8Array(bytes)].map((item) => item.toString(16).padStart(2, "0")).join("").toUpperCase();
+    return `GL-${hash.slice(0, 8)}-${hash.slice(8, 16)}-${hash.slice(16, 24)}`;
+  }
+  return `GL-${btoa(source).replace(/[^A-Z0-9]/gi, "").slice(0, 24).toUpperCase()}`;
+};
 
 function Modal({ title, onClose, children }) {
   return (
@@ -1080,6 +1089,7 @@ function Collect({
     [cancelledBy, setCancelledBy] = useState("client"),
     [reason, setReason] = useState(cancelReasons.client[0]),
     [location, setLocation] = useState(null),
+    [representativeRegistration, setRepresentativeRegistration] = useState(""),
     [classInfo, setClassInfo] = useState({
       sectorId: data.sectors[0]?.id || "",
       locationId: data.locations[0]?.id || "",
@@ -1125,6 +1135,7 @@ function Collect({
         setStage("collect");
         setEntryMode("");
         setScanFailures(0);
+        setRepresentativeRegistration("");
         setAudit((a) => [
           {
             id: newid("LOG"),
@@ -1201,21 +1212,49 @@ function Collect({
       setNotice("A câmera não pôde concluir duas leituras. Continue pelo lançamento manual.");
     }
   };
-  const finish = () => {
+  const finish = async () => {
+    if (!representativeRegistration.trim()) {
+      setNotice("Informe a matrícula do representante do local para encerrar a aula.");
+      return;
+    }
+    const at = new Date().toISOString();
+    const id = newid("AULA");
+    const certificate = await certificateFor({
+      id,
+      teacherId: user.id,
+      clientId,
+      unitId,
+      classInfo,
+      representativeRegistration: representativeRegistration.trim(),
+      at,
+      location,
+    });
     setClasses((c) => [
       ...c,
       {
-        id: newid("AULA"),
+        id,
         clientId,
         unitId,
         ...classInfo,
         status: "applied",
-        at: new Date().toISOString(),
+        at,
         teacherId: user.id,
+        representativeRegistration: representativeRegistration.trim(),
+        certificate,
       },
     ]);
+    setAudit((current) => [{
+      id: newid("LOG"),
+      event: "Aula encerrada e validada pelo representante",
+      teacherId: user.id,
+      teacherName: user.name,
+      at,
+      location,
+      representativeRegistration: representativeRegistration.trim(),
+      certificate,
+    }, ...current]);
     setStage("saved");
-    setNotice("Aula aplicada registrada.");
+    setNotice(`Aula registrada. Certificado ${certificate}.`);
   };
   return (
     <section>
@@ -1359,8 +1398,8 @@ function Collect({
               </> : <button className="secondary" onClick={() => { setEntryMode("qr"); setScanner(true); }}>
                 <ScanLine size={18} /> Ler QR Code
               </button>}
-              <button className="primary" onClick={finish}>
-                Encerrar aula
+              <button className="primary" onClick={() => setStage("signature")}>
+                Validar e encerrar
               </button>
             </section>
           )}
@@ -1396,6 +1435,21 @@ function Collect({
             </div>
           </section>
         </>
+      )}
+      {stage === "signature" && (
+        <section className="card representative-confirmation">
+          <p className="eyebrow">CONFIRMAÇÃO DO LOCAL</p>
+          <h2>Validação do representante</h2>
+          <p>Antes de fechar a aula, peça ao representante do setor para informar a matrícula. Esse registro gera um certificado de autenticação para a auditoria.</p>
+          <label>
+            Matrícula do representante
+            <input autoFocus value={representativeRegistration} onChange={(event) => setRepresentativeRegistration(event.target.value)} placeholder="Digite a matrícula" />
+          </label>
+          <div>
+            <button className="secondary" onClick={() => setStage("collect")}>Voltar à lista</button>
+            <button className="primary" onClick={finish}><Check size={17} /> Confirmar e fechar aula</button>
+          </div>
+        </section>
       )}
       {stage === "saved" && (
         <section className="decision card">
@@ -1476,7 +1530,8 @@ export default function App() {
     [audit, setAudit] = useState(() => read(K.audit, [])),
     [user, setUser] = useState(() => read(K.auth, null)),
     [page, setPage] = useState("dashboard"),
-    [kind, setKind] = useState("clients");
+    [kind, setKind] = useState("clients"),
+    [online, setOnline] = useState(() => navigator.onLine);
   useEffect(() => {
     Object.entries(data).forEach(([k, v]) => write(K[k], v));
   }, [data]);
@@ -1485,6 +1540,16 @@ export default function App() {
   useEffect(() => write(K.attendance, attendance), [attendance]);
   useEffect(() => write(K.audit, audit), [audit]);
   useEffect(() => write(K.schedules, schedules), [schedules]);
+  useEffect(() => {
+    const connect = () => setOnline(true);
+    const disconnect = () => setOnline(false);
+    window.addEventListener("online", connect);
+    window.addEventListener("offline", disconnect);
+    return () => {
+      window.removeEventListener("online", connect);
+      window.removeEventListener("offline", disconnect);
+    };
+  }, []);
   if (!user)
     return (
       <Login
@@ -1540,7 +1605,7 @@ export default function App() {
         <div className="user-nav">
           <span className="offline">
             <span />
-            Offline disponível
+            {online ? "Dados salvos neste dispositivo" : "Sem internet · dados protegidos"}
           </span>
           <span className="teacher-name">
             {user.name} · {roles[user.role]}
@@ -1556,7 +1621,7 @@ export default function App() {
         </div>
       </nav>
       <div className="container">
-        <div className="app-tabs">
+        {nav.length > 1 && <div className="app-tabs">
           {nav.map(([v, I, l]) => (
             <button
               key={v}
@@ -1567,7 +1632,7 @@ export default function App() {
               {l}
             </button>
           ))}
-        </div>
+        </div>}
         {page === "dashboard" && (
           <Dashboard
             data={data}
@@ -1644,6 +1709,8 @@ export default function App() {
                             ? `${x.location.latitude}, ${x.location.longitude} · precisão ${Math.round(x.location.accuracy)} m`
                             : "Sem localização"}
                         </small>
+                        {x.representativeRegistration && <small>Representante: matrícula {x.representativeRegistration}</small>}
+                        {x.certificate && <code className="certificate">{x.certificate}</code>}
                       </div>
                     </article>
                   ))
