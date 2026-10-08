@@ -16,6 +16,7 @@ import {
   QrCode,
   ScanLine,
   Trash2,
+  Pencil,
   UserRoundPlus,
   Users,
   X,
@@ -130,6 +131,33 @@ const write = (key, value) => localStorage.setItem(key, JSON.stringify(value));
 const newid = (p) => `${p}-${crypto.randomUUID().slice(0, 8)}`;
 const nameOf = (list, id) => list.find((x) => x.id === id)?.name || "—";
 const rate = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : "0%");
+const clientIdsFor = (user) => {
+  if (user.role === "admin") return [];
+  if (user.role === "professor")
+    return user.clientIds?.length
+      ? user.clientIds
+      : user.clientId
+        ? [user.clientId]
+        : [];
+  return user.clientId ? [user.clientId] : [];
+};
+const normalizeUser = (user) => {
+  if (user.role === "admin") {
+    const { clientId, clientIds, unitId, ...admin } = user;
+    return admin;
+  }
+  if (user.role === "professor") {
+    const { clientId, ...professor } = user;
+    return { ...professor, clientIds: [...new Set(user.clientIds || (clientId ? [clientId] : []))] };
+  }
+  const { clientIds, ...client } = user;
+  return { ...client, clientId: user.clientId || "" };
+};
+const userCompaniesLabel = (user, clients) => {
+  if (user.role === "admin") return "Sem empresa vinculada";
+  const names = clientIdsFor(user).map((id) => nameOf(clients, id)).filter((name) => name !== "—");
+  return names.join(", ") || "Empresa não definida";
+};
 
 function Modal({ title, onClose, children }) {
   return (
@@ -146,10 +174,12 @@ function Modal({ title, onClose, children }) {
     </div>
   );
 }
-function Login({ users, onLogin }) {
+function Login({ users, onLogin, setUsers }) {
   const [email, setEmail] = useState("admin@elevalife.com.br"),
     [password, setPassword] = useState(""),
-    [error, setError] = useState("");
+    [error, setError] = useState(""),
+    [mode, setMode] = useState("login"),
+    [message, setMessage] = useState("");
   const submit = (e) => {
     e.preventDefault();
     const user = users.find(
@@ -160,6 +190,33 @@ function Login({ users, onLogin }) {
     if (!user) return setError("E-mail ou senha inválidos.");
     onLogin(user);
   };
+  const firstAccess = (e) => {
+    e.preventDefault();
+    const user = users.find((x) => x.email.toLowerCase() === email.toLowerCase());
+    if (!user) return setError("Não localizamos este e-mail.");
+    if (password.length < 8) return setError("Crie uma senha com pelo menos 8 caracteres.");
+    setUsers((current) => current.map((x) => x.id === user.id ? {
+      ...x,
+      password,
+      activationStatus: "active",
+      activatedAt: new Date().toISOString(),
+    } : x));
+    setError("");
+    setMessage("Senha criada. Entre com seu e-mail e a nova senha.");
+    setMode("login");
+    setPassword("");
+  };
+  const resetPassword = (e) => {
+    e.preventDefault();
+    const user = users.find((x) => x.email.toLowerCase() === email.toLowerCase());
+    if (user) setUsers((current) => current.map((x) => x.id === user.id ? {
+      ...x,
+      resetRequestedAt: new Date().toISOString(),
+    } : x));
+    setError("");
+    setMessage("Solicitação registrada. As instruções serão entregues quando o serviço de e-mail estiver configurado.");
+  };
+  const action = mode === "first" ? firstAccess : mode === "reset" ? resetPassword : submit;
   return (
     <main className="login-page">
       <section className="login-card">
@@ -170,11 +227,11 @@ function Login({ users, onLogin }) {
           </span>
         </div>
         <p className="eyebrow">ACESSO SEGURO</p>
-        <h1>Gestão de Ginástica Laboral.</h1>
+        <h1>{mode === "login" ? "Gestão de Ginástica Laboral." : mode === "first" ? "Crie sua senha." : "Redefina sua senha."}</h1>
         <p className="muted">
-          Acesso por perfil de administrador, professor ou cliente.
+          {mode === "login" ? "Acesso por perfil de administrador, professor ou cliente." : mode === "first" ? "Use o e-mail que recebeu o convite de primeiro acesso." : "Informe seu e-mail para receber as instruções."}
         </p>
-        <form className="form" onSubmit={submit}>
+        <form className="form" onSubmit={action}>
           <label>
             E-mail
             <input
@@ -184,21 +241,24 @@ function Login({ users, onLogin }) {
               required
             />
           </label>
-          <label>
-            Senha
+          {mode !== "reset" && <label>
+            {mode === "first" ? "Nova senha" : "Senha"}
             <input
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               type="password"
-              required
+              required={mode !== "reset"}
             />
-          </label>
+          </label>}
           {error && <p className="error">{error}</p>}
-          <button className="primary full">Entrar</button>
+          {message && <p className="notice">{message}</p>}
+          <button className="primary full">{mode === "login" ? "Entrar" : mode === "first" ? "Definir senha" : "Enviar instruções"}</button>
         </form>
-        <p className="login-note">
-          Demonstração: admin@elevalife.com.br · eleva123.
-        </p>
+        <div className="login-links">
+          {mode !== "login" && <button onClick={() => { setMode("login"); setError(""); setMessage(""); }}>Voltar para entrar</button>}
+          {mode === "login" && <><button onClick={() => { setMode("first"); setError(""); setMessage(""); }}>Primeiro acesso</button><button onClick={() => { setMode("reset"); setError(""); setMessage(""); }}>Esqueci minha senha</button></>}
+        </div>
+        {mode === "login" && <p className="login-note">Demonstração: admin@elevalife.com.br · eleva123.</p>}
       </section>
     </main>
   );
@@ -300,13 +360,14 @@ function Filters({
   units,
   sectors,
   locations,
-  scope,
+  scopeIds = [],
 }) {
+  const isRestricted = scopeIds.length > 0;
   return (
     <section className="filters card">
       <select
         value={value.clientId}
-        disabled={!!scope}
+        disabled={scopeIds.length === 1}
         onChange={(e) =>
           setValue({
             ...value,
@@ -319,7 +380,7 @@ function Filters({
       >
         <option value="">Todos os clientes</option>
         {clients
-          .filter((x) => !scope || x.id === scope)
+          .filter((x) => !isRestricted || scopeIds.includes(x.id))
           .map((x) => (
             <option key={x.id} value={x.id}>
               {x.name}
@@ -341,7 +402,7 @@ function Filters({
         {units
           .filter(
             (x) =>
-              (!scope || x.clientId === scope) &&
+              (!isRestricted || scopeIds.includes(x.clientId)) &&
               (!value.clientId || x.clientId === value.clientId),
           )
           .map((x) => (
@@ -390,8 +451,9 @@ function Filters({
 }
 
 function Dashboard({ data, schedules, classes, attendance, user }) {
+  const permittedClientIds = clientIdsFor(user);
   const [filter, setFilter] = useState({
-      clientId: user.clientId || "",
+      clientId: user.role === "client" ? permittedClientIds[0] || "" : "",
       unitId: "",
       sectorId: "",
       shift: "",
@@ -400,7 +462,7 @@ function Dashboard({ data, schedules, classes, attendance, user }) {
     [detail, setDetail] = useState(null);
   const people = data.people.filter(
     (x) =>
-      (!user.clientId || x.clientId === user.clientId) &&
+      (user.role === "admin" || permittedClientIds.includes(x.clientId)) &&
       (!filter.clientId || x.clientId === filter.clientId) &&
       (!filter.unitId || x.unitId === filter.unitId) &&
       (!filter.sectorId || x.sectorId === filter.sectorId) &&
@@ -411,7 +473,7 @@ function Dashboard({ data, schedules, classes, attendance, user }) {
     missing = people.filter((x) => attendance[x.id]?.status !== "present");
   const related = classes.filter(
     (x) =>
-      (!user.clientId || x.clientId === user.clientId) &&
+      (user.role === "admin" || permittedClientIds.includes(x.clientId)) &&
       (!filter.clientId || x.clientId === filter.clientId) &&
       (!filter.unitId || x.unitId === filter.unitId) &&
       (!filter.sectorId || x.sectorId === filter.sectorId) &&
@@ -421,7 +483,7 @@ function Dashboard({ data, schedules, classes, attendance, user }) {
   const applied = related.filter((x) => x.status === "applied").length,
     cancelled = related.filter((x) => x.status === "cancelled").length;
   const planned = plannedClassesForMonth(schedules, {
-    clientId: user.clientId || filter.clientId,
+    clientId: user.role === "client" ? permittedClientIds[0] : filter.clientId,
     unitId: filter.unitId,
     sectorId: filter.sectorId,
     shift: filter.shift,
@@ -502,7 +564,7 @@ function Dashboard({ data, schedules, classes, attendance, user }) {
         units={data.units}
         sectors={data.sectors}
         locations={data.locations}
-        scope={user.clientId}
+        scopeIds={permittedClientIds}
       />
       <div className="metrics">
         <article>
@@ -833,19 +895,79 @@ function Registry({ kind, data, setData }) {
 }
 
 function UsersPanel({ users, setUsers, data }) {
+  const blank = () => ({
+    name: "",
+    email: "",
+    role: "professor",
+    clientIds: [],
+    clientId: data.clients[0]?.id || "",
+  });
   const [open, setOpen] = useState(false),
-    [f, setF] = useState({
-      name: "",
-      email: "",
-      password: "",
-      role: "professor",
-      clientId: data.clients[0]?.id || "",
-      unitId: data.units[0]?.id || "",
+    [editingId, setEditingId] = useState(null),
+    [f, setF] = useState(blank),
+    [feedback, setFeedback] = useState("");
+  const openCreate = () => {
+    setEditingId(null);
+    setF(blank());
+    setOpen(true);
+  };
+  const openEdit = (user) => {
+    setEditingId(user.id);
+    setF({
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      clientIds: clientIdsFor(user),
+      clientId: user.clientId || clientIdsFor(user)[0] || "",
     });
+    setOpen(true);
+  };
+  const selectRole = (role) => setF((current) => ({
+    ...current,
+    role,
+    clientIds: role === "professor" ? current.clientIds : [],
+    clientId: role === "client" ? current.clientId || current.clientIds[0] || data.clients[0]?.id || "" : "",
+  }));
+  const toggleProfessorClient = (clientId) => setF((current) => ({
+    ...current,
+    clientIds: current.clientIds.includes(clientId)
+      ? current.clientIds.filter((id) => id !== clientId)
+      : [...current.clientIds, clientId],
+  }));
   const save = (e) => {
     e.preventDefault();
-    setUsers((x) => [...x, { ...f, id: newid("USR") }]);
+    if (f.role === "professor" && !f.clientIds.length)
+      return setFeedback("Selecione ao menos uma empresa para o professor.");
+    if (f.role === "client" && !f.clientId)
+      return setFeedback("Selecione a empresa do usuário cliente.");
+    const existing = users.find((user) => user.id === editingId);
+    const base = {
+      id: editingId || newid("USR"),
+      name: f.name.trim(),
+      email: f.email.trim().toLowerCase(),
+      role: f.role,
+    };
+    const access = f.role === "admin"
+      ? {}
+      : f.role === "professor"
+        ? { clientIds: f.clientIds }
+        : { clientId: f.clientId };
+    const account = editingId
+      ? { ...existing, ...base, ...access }
+      : {
+        ...base,
+        ...access,
+        password: "",
+        activationStatus: "pending",
+        invitationSentAt: new Date().toISOString(),
+      };
+    setUsers((current) => editingId
+      ? current.map((user) => user.id === editingId ? normalizeUser(account) : user)
+      : [...current, normalizeUser(account)]);
     setOpen(false);
+    setFeedback(editingId
+      ? `Usuário ${account.name} atualizado.`
+      : `Convite de primeiro acesso preparado para ${account.email}.`);
   };
   return (
     <section className="directory">
@@ -858,10 +980,11 @@ function UsersPanel({ users, setUsers, data }) {
             Cliente: dashboards.
           </p>
         </div>
-        <button className="primary" onClick={() => setOpen(true)}>
+        <button className="primary" onClick={openCreate}>
           <UserRoundPlus size={17} /> Novo usuário
         </button>
       </section>
+      {feedback && <div className="notice">{feedback}</div>}
       <section className="card">
         <div className="participants">
           {users.map((x) => (
@@ -871,9 +994,12 @@ function UsersPanel({ users, setUsers, data }) {
                 <strong>{x.name}</strong>
                 <span>
                   {roles[x.role]} · {x.email} ·{" "}
-                  {nameOf(data.clients, x.clientId)}
+                  {userCompaniesLabel(x, data.clients)}
                 </span>
               </div>
+              <button className="row-edit" onClick={() => openEdit(x)} aria-label={`Editar ${x.name}`}>
+                <Pencil size={16} />
+              </button>
               <button
                 className="danger-button"
                 onClick={() => setUsers((a) => a.filter((y) => y.id !== x.id))}
@@ -885,7 +1011,7 @@ function UsersPanel({ users, setUsers, data }) {
         </div>
       </section>
       {open && (
-        <Modal title="Cadastrar usuário" onClose={() => setOpen(false)}>
+        <Modal title={editingId ? "Editar usuário" : "Cadastrar usuário"} onClose={() => setOpen(false)}>
           <form className="form" onSubmit={save}>
             <label>
               Nome
@@ -905,19 +1031,10 @@ function UsersPanel({ users, setUsers, data }) {
               />
             </label>
             <label>
-              Senha inicial
-              <input
-                type="password"
-                required
-                value={f.password}
-                onChange={(e) => setF({ ...f, password: e.target.value })}
-              />
-            </label>
-            <label>
               Perfil
               <select
                 value={f.role}
-                onChange={(e) => setF({ ...f, role: e.target.value })}
+                onChange={(e) => selectRole(e.target.value)}
               >
                 {Object.entries(roles).map(([v, l]) => (
                   <option key={v} value={v}>
@@ -926,39 +1043,12 @@ function UsersPanel({ users, setUsers, data }) {
                 ))}
               </select>
             </label>
-            {f.role !== "admin" && (
-              <>
-                <label>
-                  Cliente
-                  <select
-                    value={f.clientId}
-                    onChange={(e) => setF({ ...f, clientId: e.target.value })}
-                  >
-                    {data.clients.map((x) => (
-                      <option key={x.id} value={x.id}>
-                        {x.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Unidade
-                  <select
-                    value={f.unitId}
-                    onChange={(e) => setF({ ...f, unitId: e.target.value })}
-                  >
-                    {data.units
-                      .filter((x) => x.clientId === f.clientId)
-                      .map((x) => (
-                        <option key={x.id} value={x.id}>
-                          {x.name}
-                        </option>
-                      ))}
-                  </select>
-                </label>
-              </>
-            )}
-            <button className="primary full">Criar usuário</button>
+            {f.role === "admin" && <p className="form-help">Administrador tem acesso a todas as empresas e não possui empresa vinculada.</p>}
+            {f.role === "professor" && <fieldset className="check-list"><legend>Empresas vinculadas</legend>{data.clients.map((client) => <label key={client.id}><input type="checkbox" checked={f.clientIds.includes(client.id)} onChange={() => toggleProfessorClient(client.id)} />{client.name}</label>)}</fieldset>}
+            {f.role === "client" && <label>Cliente / empresa<select value={f.clientId} onChange={(e) => setF({ ...f, clientId: e.target.value })}><option value="">Selecione</option>{data.clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label>}
+            {feedback && <p className="error">{feedback.startsWith("Selecione") ? feedback : ""}</p>}
+            <p className="form-help">{editingId ? "A senha não é alterada nesta tela. Use o fluxo de redefinição de senha." : "Ao salvar, o convite de primeiro acesso fica preparado para o envio e o usuário cria a própria senha."}</p>
+            <button className="primary full">{editingId ? "Salvar alterações" : "Cadastrar e enviar convite"}</button>
           </form>
         </Modal>
       )}
@@ -976,6 +1066,7 @@ function Collect({
   audit,
   setAudit,
 }) {
+  const availableClientIds = clientIdsFor(user);
   const [stage, setStage] = useState("new"),
     [scanner, setScanner] = useState(false),
     [face, setFace] = useState(null),
@@ -988,9 +1079,19 @@ function Collect({
       locationId: data.locations[0]?.id || "",
       shift: shifts[0],
       roteiro: "Alongamento e mobilidade",
-    });
-  const clientId = user.clientId || data.clients[0]?.id,
-    unitId = user.unitId || data.units.find((x) => x.clientId === clientId)?.id;
+    }),
+    [clientId, setClientId] = useState(availableClientIds[0] || data.clients[0]?.id || "");
+  const unitId = data.units.find((x) => x.clientId === clientId)?.id;
+  useEffect(() => {
+    const unit = data.units.find((x) => x.clientId === clientId);
+    const sector = data.sectors.find((x) => x.unitId === unit?.id);
+    const classLocation = data.locations.find((x) => x.unitId === unit?.id);
+    setClassInfo((current) => ({
+      ...current,
+      sectorId: sector?.id || "",
+      locationId: classLocation?.id || "",
+    }));
+  }, [clientId]);
   const scoped = data.people.filter(
     (x) => x.clientId === clientId && (!unitId || x.unitId === unitId),
   );
@@ -1096,6 +1197,16 @@ function Collect({
           <p>Unidade: {nameOf(data.units, unitId)}.</p>
         </div>
       </section>
+      {availableClientIds.length > 1 && stage === "new" && (
+        <section className="card selection-card">
+          <label>
+            Empresa da aula
+            <select value={clientId} onChange={(e) => setClientId(e.target.value)}>
+              {data.clients.filter((client) => availableClientIds.includes(client.id)).map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}
+            </select>
+          </label>
+        </section>
+      )}
       {notice && (
         <div className="notice">
           <Check size={17} />
@@ -1310,7 +1421,7 @@ export default function App() {
     locations: read(K.locations, seed.locations),
     people: read(K.people, seed.people),
   }));
-  const [users, setUsers] = useState(() => read(K.users, seed.users)),
+  const [users, setUsers] = useState(() => read(K.users, seed.users).map(normalizeUser)),
     [schedules, setSchedules] = useState(() => read(K.schedules, seed.schedules)),
     [classes, setClasses] = useState(() => read(K.classes, [])),
     [attendance, setAttendance] = useState(() => read(K.attendance, {})),
@@ -1330,6 +1441,7 @@ export default function App() {
     return (
       <Login
         users={users}
+        setUsers={setUsers}
         onLogin={(u) => {
           setUser(u);
           write(K.auth, u);
@@ -1352,7 +1464,7 @@ export default function App() {
         ? [["collect", ScanLine, "Coleta de aula"]]
         : [["dashboard", BarChart3, "Dashboard"]];
   const scoped = data.people.filter(
-    (x) => user.role === "admin" || x.clientId === user.clientId,
+    (x) => user.role === "admin" || clientIdsFor(user).includes(x.clientId),
   );
   const report = () => {
     const csv = [
