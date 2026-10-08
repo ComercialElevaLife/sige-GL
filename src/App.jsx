@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Html5QrcodeScanner } from 'html5-qrcode';
+import { Html5Qrcode } from 'html5-qrcode';
 import { QRCodeSVG } from 'qrcode.react';
 import { Camera, Check, ChevronLeft, CircleAlert, ClipboardCheck, LayoutDashboard, Plus, QrCode, ScanLine, UserRoundPlus, Users, X } from 'lucide-react';
 import { verifyFace } from './biometrics';
@@ -33,17 +33,34 @@ function statusLabel(status) {
 
 function QrScanner({ onResult, onClose }) {
   const handled = useRef(false);
+  const [error, setError] = useState('');
   useEffect(() => {
-    const scanner = new Html5QrcodeScanner('qr-reader', { fps: 10, qrbox: { width: 230, height: 230 } }, false);
-    scanner.render((decodedText) => {
+    const scanner = new Html5Qrcode('qr-reader');
+    const config = { fps: 10, qrbox: { width: 240, height: 240 }, aspectRatio: 1 };
+    const found = async (decodedText) => {
       if (handled.current) return;
       handled.current = true;
-      scanner.clear().catch(() => {});
+      await scanner.stop().catch(() => {});
       onResult(decodedText);
-    }, () => {});
-    return () => scanner.clear().catch(() => {});
+    };
+    const start = async () => {
+      try {
+        await scanner.start({ facingMode: { exact: 'environment' } }, config, found, () => {});
+      } catch {
+        try {
+          const cameras = await Html5Qrcode.getCameras();
+          if (!cameras.length) throw new Error('Nenhuma câmera foi encontrada.');
+          const rear = cameras.find((camera) => /back|rear|traseira/i.test(camera.label)) || cameras[0];
+          await scanner.start(rear.id, config, found, () => {});
+        } catch (cameraError) {
+          setError(cameraError.message || 'Não foi possível abrir a câmera. Permita o acesso à câmera no navegador e tente novamente.');
+        }
+      }
+    };
+    start();
+    return () => scanner.stop().catch(() => {});
   }, [onResult]);
-  return <Modal title="Ler QR Code" onClose={onClose}><p className="muted">Aponte a câmera para o QR Code do participante.</p><div id="qr-reader" /></Modal>;
+  return <Modal title="Ler QR Code" onClose={onClose}><p className="muted">A câmera traseira é aberta automaticamente. Aponte para o QR Code do participante.</p><div id="qr-reader" />{error && <p className="error">{error}</p>}</Modal>;
 }
 
 function FaceCapture({ participant, onClose, onCaptured }) {
