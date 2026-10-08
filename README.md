@@ -13,6 +13,9 @@ Aplicação móvel independente para o profissional de Ginástica Laboral regist
 - Presença manual como contingência.
 - Registros guardados no navegador e aplicativo cacheado após o primeiro acesso, permitindo coleta mesmo sem internet durante a aula.
 - Estado claro de `presença confirmada` ou `aguardando revisão facial`.
+- Dashboard de adesão geral, por setor e por turno, com a lista de participantes sem registro.
+- Indicadores de aulas aplicadas e cancelamentos, com metas de 75% de adesão e 90% de aulas aplicadas.
+- Login demonstrativo do professor e registro do início da aula com data, hora e geolocalização do navegador.
 
 ## Rodar localmente
 
@@ -54,6 +57,16 @@ Resposta esperada:
 Qualquer outro estado mantém a ocorrência para revisão manual. O backend deve encaminhar a imagem ao fornecedor escolhido, solicitar comparação facial 1:1 e prova de vida, registrar somente o resultado necessário e descartar a imagem conforme a política de retenção.
 
 Sem essa variável, a aplicação continua operacional para QR e solicita confirmação manual. A selfie não é guardada nem tratada como autenticação biométrica.
+
+## Indicadores do programa
+
+O dashboard segue os indicadores definidos na proposta técnica: taxa de adesão geral e por setor, taxa efetiva de aulas aplicadas geral e por setor, e controle de cancelamentos. A aplicação também exibe a adesão por turno e os participantes previstos sem registro.
+
+- **Taxa de adesão:** participantes com presença confirmada ÷ participantes previstos.
+- **Taxa de aulas aplicadas:** aulas realizadas ÷ aulas planejadas.
+- **Cancelamento:** aulas canceladas ÷ aulas planejadas.
+
+As metas de referência registradas na proposta são 75% de participação e 90% de aulas aplicadas. Os dados de exemplo serão substituídos pelos registros persistidos na API quando o módulo for integrado ao SIGE Ergo.
 
 ## Próximos pontos de integração no SIGE Ergo
 
