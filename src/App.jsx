@@ -264,7 +264,7 @@ function Login({ users, onLogin, setUsers }) {
   );
 }
 
-function Scanner({ onRead, onClose }) {
+function Scanner({ onRead, onClose, onIssue, onManual }) {
   const used = useRef(false),
     [error, setError] = useState("");
   useEffect(() => {
@@ -294,6 +294,7 @@ function Scanner({ onRead, onClose }) {
           );
         } catch {
           setError("Permita o acesso à câmera para ler o QR Code.");
+          onIssue?.();
         }
       }
     })();
@@ -304,6 +305,9 @@ function Scanner({ onRead, onClose }) {
       <p className="muted">A câmera traseira é aberta automaticamente.</p>
       <div id="qr-reader" />
       {error && <p className="error">{error}</p>}
+      <button className="secondary full" onClick={onManual}>
+        Não conseguiu ler? Usar lançamento manual
+      </button>
     </Modal>
   );
 }
@@ -1069,6 +1073,8 @@ function Collect({
   const availableClientIds = clientIdsFor(user);
   const [stage, setStage] = useState("new"),
     [scanner, setScanner] = useState(false),
+    [entryMode, setEntryMode] = useState(""),
+    [scanFailures, setScanFailures] = useState(0),
     [face, setFace] = useState(null),
     [notice, setNotice] = useState(""),
     [cancelledBy, setCancelledBy] = useState("client"),
@@ -1117,6 +1123,8 @@ function Collect({
         };
         setLocation(loc);
         setStage("collect");
+        setEntryMode("");
+        setScanFailures(0);
         setAudit((a) => [
           {
             id: newid("LOG"),
@@ -1152,11 +1160,11 @@ function Collect({
     setStage("saved");
     setNotice("Cancelamento registrado.");
   };
-  const register = (person, method) =>
+  const register = (person, method, status = "present") =>
     setAttendance((a) => ({
       ...a,
       [person.id]: {
-        status: "present",
+        status,
         method,
         at: new Date().toISOString(),
         teacherId: user.id,
@@ -1169,8 +1177,29 @@ function Collect({
     const person = classPeople.find(
       (x) => x.id === (value.startsWith("SIGEGL:") ? value.slice(7) : value),
     );
-    if (!person) return setNotice("Colaborador não vinculado ao professor.");
+    if (!person) {
+      const attempts = scanFailures + 1;
+      setScanFailures(attempts);
+      if (attempts >= 2) {
+        setEntryMode("manual");
+        return setNotice("Não foi possível validar o QR Code após duas tentativas. Use o lançamento manual.");
+      }
+      return setNotice("QR Code não localizado nesta lista. Tente novamente ou use o lançamento manual.");
+    }
+    setScanFailures(0);
     setFace(person);
+  };
+  const registerManual = (person, status) => {
+    register(person, "manual", status);
+  };
+  const reportScannerIssue = () => {
+    const attempts = scanFailures + 1;
+    setScanFailures(attempts);
+    if (attempts >= 2) {
+      setScanner(false);
+      setEntryMode("manual");
+      setNotice("A câmera não pôde concluir duas leituras. Continue pelo lançamento manual.");
+    }
   };
   const finish = () => {
     setClasses((c) => [
@@ -1304,18 +1333,41 @@ function Collect({
               </span>
             </div>
           </section>
-          <section className="actions">
-            <button className="primary" onClick={() => setScanner(true)}>
-              <ScanLine size={18} /> Ler QR Code
-            </button>
-            <button className="secondary" onClick={finish}>
-              Encerrar aula
-            </button>
-          </section>
+          {!entryMode ? (
+            <section className="entry-choice card">
+              <p className="eyebrow">REGISTRO DE PARTICIPAÇÃO</p>
+              <h2>Como deseja registrar as presenças?</h2>
+              <p>Escolha a leitura pelo QR Code ou o lançamento manual da lista desta aula.</p>
+              <div>
+                <button className="primary" onClick={() => { setEntryMode("qr"); setScanner(true); }}>
+                  <ScanLine size={18} /> Ler QR Code
+                </button>
+                <button className="secondary" onClick={() => setEntryMode("manual")}>
+                  <ClipboardList size={18} /> Lançamento manual
+                </button>
+              </div>
+            </section>
+          ) : (
+            <section className="actions">
+              {entryMode === "qr" ? <>
+                <button className="primary" onClick={() => setScanner(true)}>
+                  <ScanLine size={18} /> Ler próximo QR Code
+                </button>
+                <button className="secondary" onClick={() => setEntryMode("manual")}>
+                  <ClipboardList size={18} /> Lançamento manual
+                </button>
+              </> : <button className="secondary" onClick={() => { setEntryMode("qr"); setScanner(true); }}>
+                <ScanLine size={18} /> Ler QR Code
+              </button>}
+              <button className="primary" onClick={finish}>
+                Encerrar aula
+              </button>
+            </section>
+          )}
           <section className="card">
             <div className="card-heading">
-              <h2>Colaboradores vinculados</h2>
-              <p>Sem registro serão considerados faltantes.</p>
+              <h2>{entryMode === "manual" ? "Lançamento manual" : "Colaboradores vinculados"}</h2>
+              <p>{entryMode === "manual" ? "Marque P (presente), A (ausente) ou F (faltante) para cada pessoa desta lista." : "A lista foi filtrada pelo setor, local e turno da aula."}</p>
             </div>
             <div className="participants">
               {classPeople.map((x) => (
@@ -1328,19 +1380,15 @@ function Collect({
                       {x.shift}
                     </span>
                   </div>
-                  {attendance[x.id]?.status === "present" ? (
+                  {entryMode === "manual" ? (
+                    <div className="attendance-actions">
+                      {[["present", "P", "Presente"], ["absent", "A", "Ausente"], ["missing", "F", "Faltante"]].map(([status, short, label]) => <button key={status} className={attendance[x.id]?.status === status ? `attendance-${status} selected` : `attendance-${status}`} title={label} onClick={() => registerManual(x, status)}>{short}</button>)}
+                    </div>
+                  ) : attendance[x.id]?.status === "present" ? (
                     <span className="badge present">Presença confirmada</span>
                   ) : (
                     <div className="row-actions">
-                      <button onClick={() => setFace(x)}>
-                        <Camera size={17} />
-                      </button>
-                      <button
-                        className="check-button"
-                        onClick={() => register(x, "manual")}
-                      >
-                        <Check size={17} />
-                      </button>
+                      <span className="badge manual_review">Aguardando QR Code</span>
                     </div>
                   )}
                 </article>
@@ -1358,7 +1406,7 @@ function Collect({
           </button>
         </section>
       )}
-      {scanner && <Scanner onRead={read} onClose={() => setScanner(false)} />}{" "}
+      {scanner && <Scanner onRead={read} onClose={() => { setScanner(false); if (entryMode === "qr" && scanFailures >= 2) setEntryMode("manual"); }} onIssue={reportScannerIssue} onManual={() => { setScanner(false); setEntryMode("manual"); }} />}{" "}
       {face && (
         <Face
           person={face}
