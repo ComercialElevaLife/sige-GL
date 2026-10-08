@@ -1,290 +1,1379 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Html5Qrcode } from 'html5-qrcode';
-import { QRCodeSVG } from 'qrcode.react';
-import { BarChart3, Camera, Check, ChevronLeft, CircleAlert, ClipboardCheck, ClipboardList, LayoutDashboard, LogOut, MapPin, Plus, QrCode, ScanLine, UserRoundPlus, Users, X } from 'lucide-react';
-import { verifyFace } from './biometrics';
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Html5Qrcode } from "html5-qrcode";
+import { QRCodeSVG } from "qrcode.react";
+import {
+  BarChart3,
+  Building2,
+  Camera,
+  Check,
+  ClipboardCheck,
+  ClipboardList,
+  Download,
+  FileText,
+  LogOut,
+  MapPin,
+  Plus,
+  QrCode,
+  ScanLine,
+  Trash2,
+  UserRoundPlus,
+  Users,
+  X,
+} from "lucide-react";
+import { verifyFace } from "./biometrics";
 
-const defaultParticipants = [
-  { id: 'GL-0001', name: 'Ana Clara Souza', sector: 'Administrativo', shift: 'Administrativo', active: true },
-  { id: 'GL-0002', name: 'Bruno Henrique Lima', sector: 'Administrativo', shift: 'Administrativo', active: true },
-  { id: 'GL-0003', name: 'Carla Mendes', sector: 'Produção', shift: '1º turno', active: true },
-  { id: 'GL-0004', name: 'Diego Santos', sector: 'Produção', shift: '1º turno', active: true },
-  { id: 'GL-0005', name: 'Elisa Ferreira', sector: 'Produção', shift: '2º turno', active: true },
-  { id: 'GL-0006', name: 'Felipe Rocha', sector: 'Produção', shift: '2º turno', active: true },
-  { id: 'GL-0007', name: 'Gabriela Alves', sector: 'Logística', shift: '3º turno', active: true },
-  { id: 'GL-0008', name: 'Hugo Martins', sector: 'Logística', shift: '3º turno', active: true },
-];
-
-const session = { id: 'aula-2026-10-08-0900', company: 'Empresa demonstração', place: 'Administrativo', teacher: 'Professor(a) GL', time: 'Hoje, 09:00' };
-const storageKey = `sige-gl-attendance-${session.id}`;
-const participantsKey = 'sige-gl-participants';
-const loginKey = 'sige-gl-teacher';
-const auditKey = 'sige-gl-audit-log';
-const teachers = [
-  { id: 'PROF-001', name: 'Mariana Costa' },
-  { id: 'PROF-002', name: 'Rafael Lima' },
-];
-const classRecords = [
-  { id: 'AULA-001', sector: 'Administrativo', shift: 'Administrativo', status: 'applied' },
-  { id: 'AULA-002', sector: 'Produção', shift: '1º turno', status: 'applied' },
-  { id: 'AULA-003', sector: 'Produção', shift: '1º turno', status: 'applied' },
-  { id: 'AULA-004', sector: 'Produção', shift: '2º turno', status: 'applied' },
-  { id: 'AULA-005', sector: 'Produção', shift: '2º turno', status: 'cancelled' },
-  { id: 'AULA-006', sector: 'Logística', shift: '3º turno', status: 'applied' },
-  { id: 'AULA-007', sector: 'Logística', shift: '3º turno', status: 'applied' },
-];
-
-function getStoredAttendance() {
-  try { return JSON.parse(localStorage.getItem(storageKey)) || {}; } catch { return {}; }
-}
-
-function getStoredParticipants() {
+const K = {
+  users: "gl-users",
+  clients: "gl-clients",
+  units: "gl-units",
+  sectors: "gl-sectors",
+  locations: "gl-locations",
+  people: "gl-people",
+  classes: "gl-classes",
+  attendance: "gl-attendance",
+  audit: "gl-audit",
+  auth: "gl-auth",
+};
+const roles = {
+  admin: "Administrador",
+  professor: "Professor",
+  client: "Cliente",
+};
+const shifts = ["Administrativo", "1º turno", "2º turno", "3º turno"];
+const cancelReasons = {
+  client: [
+    "Ausência de pessoal no setor",
+    "Treinamento",
+    "Reunião",
+    "Solicitada pelo responsável da área",
+  ],
+  eleva: ["Ausência do professor"],
+};
+const seed = {
+  clients: [{ id: "C-1", name: "LIBBS" }],
+  units: [{ id: "U-1", clientId: "C-1", name: "Unidade Farmacêutica" }],
+  sectors: [
+    { id: "S-1", unitId: "U-1", name: "Administrativo" },
+    { id: "S-2", unitId: "U-1", name: "Produção" },
+    { id: "S-3", unitId: "U-1", name: "Logística" },
+  ],
+  locations: [
+    { id: "L-1", unitId: "U-1", name: "Sala de treinamento" },
+    { id: "L-2", unitId: "U-1", name: "Área de produção" },
+    { id: "L-3", unitId: "U-1", name: "Área de expedição" },
+  ],
+  people: [
+    ["P-1", "Ana Clara Souza", "M-1001", "S-1", "L-1", "Administrativo"],
+    ["P-2", "Bruno Henrique Lima", "M-1002", "S-1", "L-1", "Administrativo"],
+    ["P-3", "Carla Mendes", "M-1003", "S-2", "L-2", "1º turno"],
+    ["P-4", "Diego Santos", "M-1004", "S-2", "L-2", "1º turno"],
+    ["P-5", "Elisa Ferreira", "M-1005", "S-2", "L-2", "2º turno"],
+    ["P-6", "Felipe Rocha", "M-1006", "S-2", "L-2", "2º turno"],
+    ["P-7", "Gabriela Alves", "M-1007", "S-3", "L-3", "3º turno"],
+    ["P-8", "Hugo Martins", "M-1008", "S-3", "L-3", "3º turno"],
+  ].map(([id, name, registration, sectorId, locationId, shift]) => ({
+    id,
+    name,
+    registration,
+    document: "",
+    clientId: "C-1",
+    unitId: "U-1",
+    sectorId,
+    locationId,
+    shift,
+  })),
+  users: [
+    {
+      id: "A-1",
+      name: "Administrador Eleva",
+      email: "admin@elevalife.com.br",
+      password: "eleva123",
+      role: "admin",
+    },
+    {
+      id: "PR-1",
+      name: "Mariana Costa",
+      email: "mariana@elevalife.com.br",
+      password: "eleva123",
+      role: "professor",
+      clientId: "C-1",
+      unitId: "U-1",
+    },
+    {
+      id: "CL-1",
+      name: "Gestor LIBBS",
+      email: "gestor@libbs.com.br",
+      password: "eleva123",
+      role: "client",
+      clientId: "C-1",
+      unitId: "U-1",
+    },
+  ],
+};
+const read = (key, fallback) => {
   try {
-    const stored = JSON.parse(localStorage.getItem(participantsKey));
-    return Array.isArray(stored) && stored.length ? stored.map((participant) => ({ ...participant, shift: participant.shift || 'Administrativo' })) : defaultParticipants;
-  } catch { return defaultParticipants; }
+    return JSON.parse(localStorage.getItem(key)) ?? fallback;
+  } catch {
+    return fallback;
+  }
+};
+const write = (key, value) => localStorage.setItem(key, JSON.stringify(value));
+const newid = (p) => `${p}-${crypto.randomUUID().slice(0, 8)}`;
+const nameOf = (list, id) => list.find((x) => x.id === id)?.name || "—";
+const rate = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : "0%");
+
+function Modal({ title, onClose, children }) {
+  return (
+    <div className="overlay">
+      <section className="modal">
+        <header>
+          <h2>{title}</h2>
+          <button className="icon" onClick={onClose}>
+            <X />
+          </button>
+        </header>
+        {children}
+      </section>
+    </div>
+  );
+}
+function Login({ users, onLogin }) {
+  const [email, setEmail] = useState("admin@elevalife.com.br"),
+    [password, setPassword] = useState(""),
+    [error, setError] = useState("");
+  const submit = (e) => {
+    e.preventDefault();
+    const user = users.find(
+      (x) =>
+        x.email.toLowerCase() === email.toLowerCase() &&
+        x.password === password,
+    );
+    if (!user) return setError("E-mail ou senha inválidos.");
+    onLogin(user);
+  };
+  return (
+    <main className="login-page">
+      <section className="login-card">
+        <div className="login-brand">
+          <ClipboardCheck />
+          <span>
+            <b>ElevaLife</b> · SIGE GL
+          </span>
+        </div>
+        <p className="eyebrow">ACESSO SEGURO</p>
+        <h1>Gestão de Ginástica Laboral.</h1>
+        <p className="muted">
+          Acesso por perfil de administrador, professor ou cliente.
+        </p>
+        <form className="form" onSubmit={submit}>
+          <label>
+            E-mail
+            <input
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              type="email"
+              required
+            />
+          </label>
+          <label>
+            Senha
+            <input
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              type="password"
+              required
+            />
+          </label>
+          {error && <p className="error">{error}</p>}
+          <button className="primary full">Entrar</button>
+        </form>
+        <p className="login-note">
+          Demonstração: admin@elevalife.com.br · eleva123.
+        </p>
+      </section>
+    </main>
+  );
 }
 
-function statusLabel(status) {
-  return { present: 'Presença confirmada', manual_review: 'Aguardando revisão facial', absent: 'Falta' }[status] || status;
-}
-
-function getStoredItem(key, fallback) {
-  try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
-}
-
-function rateText(present, total) {
-  return total ? `${Math.round((present / total) * 100)}%` : '0%';
-}
-
-function QrScanner({ onResult, onClose }) {
-  const handled = useRef(false);
-  const [error, setError] = useState('');
+function Scanner({ onRead, onClose }) {
+  const used = useRef(false),
+    [error, setError] = useState("");
   useEffect(() => {
-    const scanner = new Html5Qrcode('qr-reader');
-    const config = { fps: 10, qrbox: { width: 240, height: 240 }, aspectRatio: 1 };
-    const found = async (decodedText) => {
-      if (handled.current) return;
-      handled.current = true;
-      await scanner.stop().catch(() => {});
-      onResult(decodedText);
-    };
-    const start = async () => {
+    const scanner = new Html5Qrcode("qr-reader"),
+      ok = async (value) => {
+        if (used.current) return;
+        used.current = true;
+        await scanner.stop().catch(() => {});
+        onRead(value);
+      };
+    (async () => {
       try {
-        await scanner.start({ facingMode: { exact: 'environment' } }, config, found, () => {});
+        await scanner.start(
+          { facingMode: { exact: "environment" } },
+          { fps: 10, qrbox: 240 },
+          ok,
+          () => {},
+        );
       } catch {
         try {
           const cameras = await Html5Qrcode.getCameras();
-          if (!cameras.length) throw new Error('Nenhuma câmera foi encontrada.');
-          const rear = cameras.find((camera) => /back|rear|traseira/i.test(camera.label)) || cameras[0];
-          await scanner.start(rear.id, config, found, () => {});
-        } catch (cameraError) {
-          setError(cameraError.message || 'Não foi possível abrir a câmera. Permita o acesso à câmera no navegador e tente novamente.');
+          await scanner.start(
+            cameras[0].id,
+            { fps: 10, qrbox: 240 },
+            ok,
+            () => {},
+          );
+        } catch {
+          setError("Permita o acesso à câmera para ler o QR Code.");
         }
       }
-    };
-    start();
+    })();
     return () => scanner.stop().catch(() => {});
-  }, [onResult]);
-  return <Modal title="Ler QR Code" onClose={onClose}><p className="muted">A câmera traseira é aberta automaticamente. Aponte para o QR Code do participante.</p><div id="qr-reader" />{error && <p className="error">{error}</p>}</Modal>;
+  }, [onRead]);
+  return (
+    <Modal title="Ler QR Code" onClose={onClose}>
+      <p className="muted">A câmera traseira é aberta automaticamente.</p>
+      <div id="qr-reader" />
+      {error && <p className="error">{error}</p>}
+    </Modal>
+  );
 }
-
-function FaceCapture({ participant, onClose, onCaptured }) {
-  const videoRef = useRef(null);
-  const streamRef = useRef(null);
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-
+function Face({ person, onDone, onClose }) {
+  const video = useRef(),
+    stream = useRef(),
+    [error, setError] = useState("");
   useEffect(() => {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setError('Este navegador não oferece acesso à câmera. Use Chrome, Edge ou Safari atualizados.');
-      return undefined;
-    }
-    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false })
-      .then((stream) => { streamRef.current = stream; if (videoRef.current) videoRef.current.srcObject = stream; })
-      .catch(() => setError('Não foi possível acessar a câmera. Verifique a permissão do navegador.'));
-    return () => streamRef.current?.getTracks().forEach((track) => track.stop());
+    navigator.mediaDevices
+      ?.getUserMedia({ video: { facingMode: "user" } })
+      .then((s) => {
+        stream.current = s;
+        video.current.srcObject = s;
+      })
+      .catch(() => setError("Não foi possível abrir a câmera frontal."));
+    return () => stream.current?.getTracks().forEach((t) => t.stop());
   }, []);
-
-  const capture = async () => {
-    const video = videoRef.current;
-    if (!video?.videoWidth) return setError('A câmera ainda está carregando.');
-    setBusy(true); setError('');
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-    canvas.getContext('2d').drawImage(video, 0, 0);
-    canvas.toBlob(async (blob) => {
-      try { onCaptured(await verifyFace({ participantId: participant.id, sessionId: session.id, image: blob })); }
-      catch (e) { setError(e.message); setBusy(false); }
-    }, 'image/jpeg', 0.9);
+  const capture = () => {
+    if (!video.current?.videoWidth) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = video.current.videoWidth;
+    canvas.height = video.current.videoHeight;
+    canvas.getContext("2d").drawImage(video.current, 0, 0);
+    canvas.toBlob(async (image) => {
+      try {
+        onDone(
+          await verifyFace({
+            participantId: person.id,
+            sessionId: "aula",
+            image,
+          }),
+        );
+      } catch (e) {
+        setError(e.message);
+      }
+    }, "image/jpeg");
   };
-
-  return <Modal title="Validação facial" onClose={onClose}>
-    <p className="muted">{participant.name}</p>
-    <video className="camera" ref={videoRef} autoPlay playsInline muted />
-    <p className="hint"><CircleAlert size={16} /> Olhe para a câmera, com o rosto bem iluminado e sem outra pessoa no enquadramento.</p>
-    {error && <p className="error">{error}</p>}
-    <button className="primary full" disabled={busy} onClick={capture}><Camera size={18} /> {busy ? 'Validando…' : 'Capturar e validar'}</button>
-  </Modal>;
+  return (
+    <Modal title="Validação facial" onClose={onClose}>
+      <p className="muted">{person.name}</p>
+      <video className="camera" ref={video} autoPlay playsInline muted />
+      {error && <p className="error">{error}</p>}
+      <button className="primary full" onClick={capture}>
+        <Camera size={17} /> Capturar e validar
+      </button>
+    </Modal>
+  );
 }
 
-function Modal({ title, children, onClose }) {
-  return <div className="overlay" role="dialog" aria-modal="true"><section className="modal"><header><h2>{title}</h2><button className="icon" onClick={onClose} aria-label="Fechar"><X /></button></header>{children}</section></div>;
+function Filters({
+  value,
+  setValue,
+  clients,
+  units,
+  sectors,
+  locations,
+  scope,
+}) {
+  return (
+    <section className="filters card">
+      <select
+        value={value.clientId}
+        disabled={!!scope}
+        onChange={(e) =>
+          setValue({
+            ...value,
+            clientId: e.target.value,
+            unitId: "",
+            sectorId: "",
+            locationId: "",
+          })
+        }
+      >
+        <option value="">Todos os clientes</option>
+        {clients
+          .filter((x) => !scope || x.id === scope)
+          .map((x) => (
+            <option key={x.id} value={x.id}>
+              {x.name}
+            </option>
+          ))}
+      </select>
+      <select
+        value={value.unitId}
+        onChange={(e) =>
+          setValue({
+            ...value,
+            unitId: e.target.value,
+            sectorId: "",
+            locationId: "",
+          })
+        }
+      >
+        <option value="">Todas as unidades</option>
+        {units
+          .filter(
+            (x) =>
+              (!scope || x.clientId === scope) &&
+              (!value.clientId || x.clientId === value.clientId),
+          )
+          .map((x) => (
+            <option key={x.id} value={x.id}>
+              {x.name}
+            </option>
+          ))}
+      </select>
+      <select
+        value={value.sectorId}
+        onChange={(e) => setValue({ ...value, sectorId: e.target.value })}
+      >
+        <option value="">Todos os setores</option>
+        {sectors
+          .filter((x) => !value.unitId || x.unitId === value.unitId)
+          .map((x) => (
+            <option key={x.id} value={x.id}>
+              {x.name}
+            </option>
+          ))}
+      </select>
+      <select
+        value={value.shift}
+        onChange={(e) => setValue({ ...value, shift: e.target.value })}
+      >
+        <option value="">Todos os turnos</option>
+        {shifts.map((x) => (
+          <option key={x}>{x}</option>
+        ))}
+      </select>
+      <select
+        value={value.locationId}
+        onChange={(e) => setValue({ ...value, locationId: e.target.value })}
+      >
+        <option value="">Todos os locais</option>
+        {locations
+          .filter((x) => !value.unitId || x.unitId === value.unitId)
+          .map((x) => (
+            <option key={x.id} value={x.id}>
+              {x.name}
+            </option>
+          ))}
+      </select>
+    </section>
+  );
 }
 
-function ParticipantForm({ onClose, onSave }) {
-  const [name, setName] = useState('');
-  const [sector, setSector] = useState('');
-  const [shift, setShift] = useState('Administrativo');
-  const submit = (event) => {
-    event.preventDefault();
-    onSave({ id: `GL-${String(Date.now()).slice(-6)}`, name: name.trim(), sector: sector.trim(), shift, active: true });
+function Dashboard({ data, classes, attendance, user }) {
+  const [filter, setFilter] = useState({
+      clientId: user.clientId || "",
+      unitId: "",
+      sectorId: "",
+      shift: "",
+      locationId: "",
+    }),
+    [detail, setDetail] = useState(null);
+  const people = data.people.filter(
+    (x) =>
+      (!user.clientId || x.clientId === user.clientId) &&
+      (!filter.clientId || x.clientId === filter.clientId) &&
+      (!filter.unitId || x.unitId === filter.unitId) &&
+      (!filter.sectorId || x.sectorId === filter.sectorId) &&
+      (!filter.shift || x.shift === filter.shift) &&
+      (!filter.locationId || x.locationId === filter.locationId),
+  );
+  const done = people.filter((x) => attendance[x.id]?.status === "present"),
+    missing = people.filter((x) => attendance[x.id]?.status !== "present");
+  const related = classes.filter(
+    (x) =>
+      (!user.clientId || x.clientId === user.clientId) &&
+      (!filter.clientId || x.clientId === filter.clientId) &&
+      (!filter.unitId || x.unitId === filter.unitId) &&
+      (!filter.sectorId || x.sectorId === filter.sectorId) &&
+      (!filter.shift || x.shift === filter.shift) &&
+      (!filter.locationId || x.locationId === filter.locationId),
+  );
+  const applied = related.filter((x) => x.status === "applied").length,
+    cancelled = related.filter((x) => x.status === "cancelled").length;
+  const groups = (field, list, label) =>
+    Object.values(
+      people.reduce((out, x) => {
+        const k = x[field];
+        out[k] ??= { key: k, label: label(k), total: 0, present: 0 };
+        out[k].total++;
+        if (attendance[x.id]?.status === "present") out[k].present++;
+        return out;
+      }, {}),
+    );
+  const Group = ({ field, label, title }) => (
+    <section className="card report-card">
+      <div className="card-heading">
+        <h2>{title}</h2>
+        <p>Clique em uma linha para ver o detalhamento.</p>
+      </div>
+      <div className="report-rows">
+        {groups(field, people, label).map((g) => (
+          <button
+            className="report-row interactive"
+            key={g.key}
+            onClick={() =>
+              setDetail({
+                title: g.label,
+                people: people.filter((x) => x[field] === g.key),
+              })
+            }
+          >
+            <strong>{g.label}</strong>
+            <span>
+              {g.present} presentes · {g.total - g.present} faltantes
+            </span>
+            <div className="bar">
+              <i
+                style={{
+                  width: `${g.total ? (g.present / g.total) * 100 : 0}%`,
+                }}
+              />
+            </div>
+            <b>{rate(g.present, g.total)}</b>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+  return (
+    <section className="dashboard">
+      <section className="heading">
+        <div>
+          <p className="eyebrow">DASHBOARD DE INDICADORES</p>
+          <h1>Adesão da Ginástica Laboral</h1>
+          <p>Filtros por cliente, unidade, setor, horário e local de aula.</p>
+        </div>
+      </section>
+      <Filters
+        value={filter}
+        setValue={setFilter}
+        clients={data.clients}
+        units={data.units}
+        sectors={data.sectors}
+        locations={data.locations}
+        scope={user.clientId}
+      />
+      <div className="metrics">
+        <article>
+          <span>Participantes</span>
+          <strong>{people.length}</strong>
+          <small>Lista prevista</small>
+        </article>
+        <article>
+          <span>Presentes</span>
+          <strong>{done.length}</strong>
+          <small>Presença confirmada</small>
+        </article>
+        <article>
+          <span>Faltantes</span>
+          <strong>{missing.length}</strong>
+          <small>Sem registro</small>
+        </article>
+        <article className="accent">
+          <span>Taxa de adesão</span>
+          <strong>{rate(done.length, people.length)}</strong>
+          <small>Meta: 75%</small>
+        </article>
+        <article>
+          <span>Aulas aplicadas</span>
+          <strong>{rate(applied, related.length)}</strong>
+          <small>
+            {applied}/{related.length} · meta: 90%
+          </small>
+        </article>
+        <article>
+          <span>Cancelamentos</span>
+          <strong>{cancelled}</strong>
+          <small>{rate(cancelled, related.length)} das aulas</small>
+        </article>
+      </div>
+      <div className="report-grid">
+        <Group
+          title="Adesão por setor"
+          field="sectorId"
+          label={(id) => nameOf(data.sectors, id)}
+        />
+        <Group title="Adesão por turno" field="shift" label={(x) => x} />
+      </div>
+      <section className="card missing-card">
+        <div className="card-heading">
+          <h2>Participantes sem registro</h2>
+          <p>Estão na lista, mas não tiveram presença confirmada.</p>
+        </div>
+        <div className="missing-list">
+          {missing.map((x) => (
+            <span key={x.id}>
+              {x.name}
+              <small>
+                {nameOf(data.sectors, x.sectorId)} · {x.shift}
+              </small>
+            </span>
+          ))}
+        </div>
+      </section>
+      {detail && (
+        <Modal
+          title={`Detalhamento: ${detail.title}`}
+          onClose={() => setDetail(null)}
+        >
+          <div className="participants">
+            {detail.people.map((x) => (
+              <article className="participant" key={x.id}>
+                <div className="avatar">{x.name[0]}</div>
+                <div className="person">
+                  <strong>{x.name}</strong>
+                  <span>{x.registration}</span>
+                </div>
+                <span
+                  className={`badge ${attendance[x.id]?.status === "present" ? "present" : "manual_review"}`}
+                >
+                  {attendance[x.id]?.status === "present"
+                    ? "Presente"
+                    : "Sem registro"}
+                </span>
+              </article>
+            ))}
+          </div>
+        </Modal>
+      )}
+    </section>
+  );
+}
+
+function Registry({ kind, data, setData }) {
+  const [open, setOpen] = useState(false),
+    [form, setForm] = useState({
+      name: "",
+      registration: "",
+      document: "",
+      clientId: data.clients[0]?.id || "",
+      unitId: data.units[0]?.id || "",
+      sectorId: data.sectors[0]?.id || "",
+      locationId: data.locations[0]?.id || "",
+      shift: shifts[0],
+    });
+  const title = {
+    clients: "Clientes",
+    units: "Unidades",
+    sectors: "Setores",
+    locations: "Locais de aula",
+    people: "Colaboradores",
+  }[kind];
+  const create = (e) => {
+    e.preventDefault();
+    let item = { id: newid(kind.slice(0, 2).toUpperCase()), name: form.name };
+    if (kind === "units" || kind === "people") item.clientId = form.clientId;
+    if (kind === "sectors" || kind === "locations" || kind === "people")
+      item.unitId = form.unitId;
+    if (kind === "people")
+      item = {
+        ...item,
+        registration: form.registration,
+        document: form.document,
+        sectorId: form.sectorId,
+        locationId: form.locationId,
+        shift: form.shift,
+      };
+    setData((d) => ({ ...d, [kind]: [...d[kind], item] }));
+    setOpen(false);
   };
-  return <Modal title="Novo participante" onClose={onClose}>
-    <form className="form" onSubmit={submit}>
-      <label>Nome completo<input value={name} onChange={(event) => setName(event.target.value)} required autoFocus /></label>
-      <label>Setor ou local de trabalho<input value={sector} onChange={(event) => setSector(event.target.value)} required /></label>
-      <label>Turno<select value={shift} onChange={(event) => setShift(event.target.value)}><option>Administrativo</option><option>1º turno</option><option>2º turno</option><option>3º turno</option></select></label>
-      <p className="hint"><CircleAlert size={16} /> O QR Code será criado automaticamente após o cadastro.</p>
-      <button className="primary full" type="submit"><UserRoundPlus size={18} /> Cadastrar participante</button>
-    </form>
-  </Modal>;
+  return (
+    <section className="directory">
+      <section className="heading">
+        <div>
+          <p className="eyebrow">CADASTRO MESTRE</p>
+          <h1>{title}</h1>
+          <p>Cadastre e mantenha a estrutura da operação.</p>
+        </div>
+        <button className="primary" onClick={() => setOpen(true)}>
+          <Plus size={17} /> Adicionar
+        </button>
+      </section>
+      <section className="card">
+        <div className="participants">
+          {data[kind].map((x) => (
+            <article className="participant" key={x.id}>
+              <div className="avatar">{x.name[0]}</div>
+              <div className="person">
+                <strong>{x.name}</strong>
+                <span>
+                  {kind === "people"
+                    ? `${x.registration} · ${nameOf(data.sectors, x.sectorId)} · ${x.shift}`
+                    : x.id}
+                </span>
+              </div>
+              <button
+                className="danger-button"
+                onClick={() =>
+                  setData((d) => ({
+                    ...d,
+                    [kind]: d[kind].filter((y) => y.id !== x.id),
+                  }))
+                }
+              >
+                <Trash2 size={17} />
+              </button>
+            </article>
+          ))}
+        </div>
+      </section>
+      {open && (
+        <Modal
+          title={`Cadastrar ${title.slice(0, -1).toLowerCase()}`}
+          onClose={() => setOpen(false)}
+        >
+          <form className="form" onSubmit={create}>
+            <label>
+              Nome
+              <input
+                required
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+              />
+            </label>
+            {kind === "people" && (
+              <>
+                <label>
+                  Matrícula ou CPF
+                  <input
+                    required
+                    value={form.registration}
+                    onChange={(e) =>
+                      setForm({ ...form, registration: e.target.value })
+                    }
+                  />
+                </label>
+                <label>
+                  CPF
+                  <input
+                    value={form.document}
+                    onChange={(e) =>
+                      setForm({ ...form, document: e.target.value })
+                    }
+                  />
+                </label>
+              </>
+            )}{" "}
+            {(kind === "units" || kind === "people") && (
+              <label>
+                Cliente
+                <select
+                  value={form.clientId}
+                  onChange={(e) =>
+                    setForm({ ...form, clientId: e.target.value })
+                  }
+                >
+                  {data.clients.map((x) => (
+                    <option key={x.id} value={x.id}>
+                      {x.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}{" "}
+            {(kind === "sectors" ||
+              kind === "locations" ||
+              kind === "people") && (
+              <label>
+                Unidade
+                <select
+                  value={form.unitId}
+                  onChange={(e) => setForm({ ...form, unitId: e.target.value })}
+                >
+                  {data.units
+                    .filter(
+                      (x) => kind !== "people" || x.clientId === form.clientId,
+                    )
+                    .map((x) => (
+                      <option key={x.id} value={x.id}>
+                        {x.name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+            )}{" "}
+            {kind === "people" && (
+              <>
+                <label>
+                  Setor
+                  <select
+                    value={form.sectorId}
+                    onChange={(e) =>
+                      setForm({ ...form, sectorId: e.target.value })
+                    }
+                  >
+                    {data.sectors
+                      .filter((x) => x.unitId === form.unitId)
+                      .map((x) => (
+                        <option key={x.id} value={x.id}>
+                          {x.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                <label>
+                  Local de aula
+                  <select
+                    value={form.locationId}
+                    onChange={(e) =>
+                      setForm({ ...form, locationId: e.target.value })
+                    }
+                  >
+                    {data.locations
+                      .filter((x) => x.unitId === form.unitId)
+                      .map((x) => (
+                        <option key={x.id} value={x.id}>
+                          {x.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                <label>
+                  Turno
+                  <select
+                    value={form.shift}
+                    onChange={(e) =>
+                      setForm({ ...form, shift: e.target.value })
+                    }
+                  >
+                    {shifts.map((x) => (
+                      <option key={x}>{x}</option>
+                    ))}
+                  </select>
+                </label>
+              </>
+            )}
+            <button className="primary full">Salvar</button>
+          </form>
+        </Modal>
+      )}
+    </section>
+  );
 }
 
-function Login({ onLogin }) {
-  const [teacherId, setTeacherId] = useState(teachers[0].id);
-  const [password, setPassword] = useState('');
-  const submit = (event) => {
-    event.preventDefault();
-    if (!password.trim()) return;
-    onLogin(teachers.find((teacher) => teacher.id === teacherId));
+function UsersPanel({ users, setUsers, data }) {
+  const [open, setOpen] = useState(false),
+    [f, setF] = useState({
+      name: "",
+      email: "",
+      password: "",
+      role: "professor",
+      clientId: data.clients[0]?.id || "",
+      unitId: data.units[0]?.id || "",
+    });
+  const save = (e) => {
+    e.preventDefault();
+    setUsers((x) => [...x, { ...f, id: newid("USR") }]);
+    setOpen(false);
   };
-  return <main className="login-page"><section className="login-card"><div className="login-brand"><ClipboardCheck /><span><b>ElevaLife</b> · SIGE GL</span></div><p className="eyebrow">ACESSO DO PROFISSIONAL</p><h1>Inicie sua aula com segurança.</h1><p className="muted">A presença, horário e localização da aula ficam vinculados ao professor logado.</p><form className="form" onSubmit={submit}><label>Professor<select value={teacherId} onChange={(event) => setTeacherId(event.target.value)}>{teachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.name} · {teacher.id}</option>)}</select></label><label>Senha<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Digite sua senha" required /></label><button className="primary full" type="submit">Entrar no SIGE GL</button></form><p className="login-note">Nesta versão independente, as credenciais são demonstrativas. A autenticação será conectada ao SIGE Ergo na integração.</p></section></main>;
+  return (
+    <section className="directory">
+      <section className="heading">
+        <div>
+          <p className="eyebrow">ACESSOS</p>
+          <h1>Usuários</h1>
+          <p>
+            Administrador: gestão completa. Professor: coleta vinculada.
+            Cliente: dashboards.
+          </p>
+        </div>
+        <button className="primary" onClick={() => setOpen(true)}>
+          <UserRoundPlus size={17} /> Novo usuário
+        </button>
+      </section>
+      <section className="card">
+        <div className="participants">
+          {users.map((x) => (
+            <article className="participant" key={x.id}>
+              <div className="avatar">{x.name[0]}</div>
+              <div className="person">
+                <strong>{x.name}</strong>
+                <span>
+                  {roles[x.role]} · {x.email} ·{" "}
+                  {nameOf(data.clients, x.clientId)}
+                </span>
+              </div>
+              <button
+                className="danger-button"
+                onClick={() => setUsers((a) => a.filter((y) => y.id !== x.id))}
+              >
+                <Trash2 size={17} />
+              </button>
+            </article>
+          ))}
+        </div>
+      </section>
+      {open && (
+        <Modal title="Cadastrar usuário" onClose={() => setOpen(false)}>
+          <form className="form" onSubmit={save}>
+            <label>
+              Nome
+              <input
+                required
+                value={f.name}
+                onChange={(e) => setF({ ...f, name: e.target.value })}
+              />
+            </label>
+            <label>
+              E-mail
+              <input
+                type="email"
+                required
+                value={f.email}
+                onChange={(e) => setF({ ...f, email: e.target.value })}
+              />
+            </label>
+            <label>
+              Senha inicial
+              <input
+                type="password"
+                required
+                value={f.password}
+                onChange={(e) => setF({ ...f, password: e.target.value })}
+              />
+            </label>
+            <label>
+              Perfil
+              <select
+                value={f.role}
+                onChange={(e) => setF({ ...f, role: e.target.value })}
+              >
+                {Object.entries(roles).map(([v, l]) => (
+                  <option key={v} value={v}>
+                    {l}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {f.role !== "admin" && (
+              <>
+                <label>
+                  Cliente
+                  <select
+                    value={f.clientId}
+                    onChange={(e) => setF({ ...f, clientId: e.target.value })}
+                  >
+                    {data.clients.map((x) => (
+                      <option key={x.id} value={x.id}>
+                        {x.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Unidade
+                  <select
+                    value={f.unitId}
+                    onChange={(e) => setF({ ...f, unitId: e.target.value })}
+                  >
+                    {data.units
+                      .filter((x) => x.clientId === f.clientId)
+                      .map((x) => (
+                        <option key={x.id} value={x.id}>
+                          {x.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              </>
+            )}
+            <button className="primary full">Criar usuário</button>
+          </form>
+        </Modal>
+      )}
+    </section>
+  );
 }
 
-function Dashboard({ participants, attendance }) {
-  const present = (participant) => attendance[participant.id]?.status === 'present';
-  const totalPresent = participants.filter(present).length;
-  const missing = participants.filter((participant) => !present(participant));
-  const groups = (field) => Object.entries(participants.reduce((result, participant) => {
-    const key = participant[field];
-    result[key] = result[key] || { name: key, total: 0, present: 0 };
-    result[key].total += 1;
-    if (present(participant)) result[key].present += 1;
-    return result;
-  }, {})).map(([, group]) => ({ ...group, missing: group.total - group.present }));
-  const appliedClasses = classRecords.filter((item) => item.status === 'applied').length;
-  const cancelledClasses = classRecords.filter((item) => item.status === 'cancelled').length;
-  const classGroups = (field) => Object.entries(classRecords.reduce((result, item) => {
-    const key = item[field];
-    result[key] = result[key] || { name: key, planned: 0, applied: 0, cancelled: 0 };
-    result[key].planned += 1;
-    result[key][item.status] += 1;
-    return result;
-  }, {})).map(([, group]) => group);
-  const GroupTable = ({ title, field }) => <section className="card report-card"><div className="card-heading"><h2>{title}</h2><p>Presentes, faltantes e taxa de adesão da aula atual.</p></div><div className="report-rows">{groups(field).map((group) => <div className="report-row" key={group.name}><strong>{group.name}</strong><span>{group.present} presentes · {group.missing} faltantes</span><div className="bar"><i style={{ width: `${group.total ? (group.present / group.total) * 100 : 0}%` }} /></div><b>{rateText(group.present, group.total)}</b></div>)}</div></section>;
-  const ClassesTable = ({ title, field }) => <section className="card report-card"><div className="card-heading"><h2>{title}</h2><p>Taxa efetiva de aulas aplicadas e cancelamentos.</p></div><div className="report-rows">{classGroups(field).map((group) => <div className="report-row" key={group.name}><strong>{group.name}</strong><span>{group.applied} aplicadas · {group.cancelled} canceladas</span><div className="bar"><i style={{ width: `${group.planned ? (group.applied / group.planned) * 100 : 0}%` }} /></div><b>{rateText(group.applied, group.planned)}</b></div>)}</div></section>;
-  return <section className="dashboard"><section className="heading"><div><p className="eyebrow">DASHBOARD DE ADESÃO</p><h1>Visão da aula</h1><p>Indicadores atualizados conforme a presença é registrada.</p></div></section><div className="metrics"><article><span>Participantes</span><strong>{participants.length}</strong><small>Lista prevista</small></article><article><span>Presentes</span><strong>{totalPresent}</strong><small>Presença confirmada</small></article><article><span>Faltantes</span><strong>{missing.length}</strong><small>Sem registro nesta aula</small></article><article className="accent"><span>Taxa de adesão</span><strong>{rateText(totalPresent, participants.length)}</strong><small>Meta mensal: 75%</small></article><article><span>Aulas aplicadas</span><strong>{rateText(appliedClasses, classRecords.length)}</strong><small>{appliedClasses}/{classRecords.length} · meta: 90%</small></article><article><span>Cancelamentos</span><strong>{cancelledClasses}</strong><small>{rateText(cancelledClasses, classRecords.length)} do cronograma</small></article></div><div className="report-grid"><GroupTable title="Adesão por setor" field="sector" /><GroupTable title="Adesão por turno" field="shift" /><ClassesTable title="Aulas aplicadas por setor" field="sector" /><ClassesTable title="Aulas aplicadas por turno" field="shift" /></div><section className="card missing-card"><div className="card-heading"><h2>Participantes sem registro</h2><p>Estas pessoas estão na lista da aula, mas ainda não tiveram presença confirmada.</p></div><div className="missing-list">{missing.length ? missing.map((participant) => <span key={participant.id}>{participant.name}<small>{participant.sector} · {participant.shift}</small></span>) : <p className="empty">Todos os participantes previstos foram registrados.</p>}</div></section></section>;
-}
-
-function AuditLog({ logs }) {
-  return <section className="directory"><section className="heading"><div><p className="eyebrow">CONFERÊNCIA OPERACIONAL</p><h1>Log de aula</h1><p>Registros de início vinculados ao professor, data, horário e localização.</p></div></section><section className="card"><div className="card-heading"><h2>{logs.length} registros</h2><p>A localização é coletada somente quando o professor inicia a aula.</p></div><div className="audit-list">{logs.length ? logs.map((log) => <article key={log.id}><MapPin size={20} /><div><strong>{log.teacherName} · {log.teacherId}</strong><span>{new Date(log.at).toLocaleString('pt-BR')} · {log.event}</span><small>{log.location ? `${log.location.latitude}, ${log.location.longitude} · precisão ${Math.round(log.location.accuracy)} m` : 'Localização não capturada'}</small></div></article>) : <p className="empty">Nenhuma aula foi iniciada neste dispositivo.</p>}</div></section></section>;
+function Collect({
+  data,
+  user,
+  classes,
+  setClasses,
+  attendance,
+  setAttendance,
+  audit,
+  setAudit,
+}) {
+  const [stage, setStage] = useState("new"),
+    [scanner, setScanner] = useState(false),
+    [face, setFace] = useState(null),
+    [notice, setNotice] = useState(""),
+    [cancelledBy, setCancelledBy] = useState("client"),
+    [reason, setReason] = useState(cancelReasons.client[0]),
+    [location, setLocation] = useState(null);
+  const clientId = user.clientId || data.clients[0]?.id,
+    unitId = user.unitId || data.units.find((x) => x.clientId === clientId)?.id;
+  const scoped = data.people.filter(
+    (x) => x.clientId === clientId && (!unitId || x.unitId === unitId),
+  );
+  const start = (given) => {
+    if (!given) {
+      setStage("cancel");
+      return;
+    }
+    if (!navigator.geolocation)
+      return setNotice("Geolocalização não disponível.");
+    navigator.geolocation.getCurrentPosition(
+      (p) => {
+        const loc = {
+          latitude: p.coords.latitude.toFixed(5),
+          longitude: p.coords.longitude.toFixed(5),
+          accuracy: p.coords.accuracy,
+        };
+        setLocation(loc);
+        setStage("collect");
+        setAudit((a) => [
+          {
+            id: newid("LOG"),
+            event: "Início de aula",
+            teacherId: user.id,
+            teacherName: user.name,
+            at: new Date().toISOString(),
+            location: loc,
+          },
+          ...a,
+        ]);
+      },
+      () => setNotice("Permita a geolocalização para iniciar a aula."),
+      { enableHighAccuracy: true, timeout: 15000 },
+    );
+  };
+  const cancel = (e) => {
+    e.preventDefault();
+    setClasses((c) => [
+      ...c,
+      {
+        id: newid("AULA"),
+        clientId,
+        unitId,
+        status: "cancelled",
+        cancelledBy,
+        reason,
+        at: new Date().toISOString(),
+        teacherId: user.id,
+      },
+    ]);
+    setStage("saved");
+    setNotice("Cancelamento registrado.");
+  };
+  const register = (person, method) =>
+    setAttendance((a) => ({
+      ...a,
+      [person.id]: {
+        status: "present",
+        method,
+        at: new Date().toISOString(),
+        teacherId: user.id,
+        location,
+      },
+    }));
+  const read = (value) => {
+    setScanner(false);
+    const person = scoped.find(
+      (x) => x.id === (value.startsWith("SIGEGL:") ? value.slice(7) : value),
+    );
+    if (!person) return setNotice("Colaborador não vinculado ao professor.");
+    setFace(person);
+  };
+  const finish = () => {
+    setClasses((c) => [
+      ...c,
+      {
+        id: newid("AULA"),
+        clientId,
+        unitId,
+        status: "applied",
+        at: new Date().toISOString(),
+        teacherId: user.id,
+      },
+    ]);
+    setStage("saved");
+    setNotice("Aula aplicada registrada.");
+  };
+  return (
+    <section>
+      <section className="heading">
+        <div>
+          <p className="eyebrow">COLETA DE AULA</p>
+          <h1>{user.name}</h1>
+          <p>Unidade: {nameOf(data.units, unitId)}.</p>
+        </div>
+      </section>
+      {notice && (
+        <div className="notice">
+          <Check size={17} />
+          {notice}
+          <button onClick={() => setNotice("")}>
+            <X size={16} />
+          </button>
+        </div>
+      )}
+      {stage === "new" && (
+        <section className="decision card">
+          <h2>A aula foi dada?</h2>
+          <p>Antes de iniciar a coleta, confirme a realização da aula.</p>
+          <div>
+            <button className="primary" onClick={() => start(true)}>
+              Sim, iniciar aula
+            </button>
+            <button className="secondary" onClick={() => start(false)}>
+              Não, registrar cancelamento
+            </button>
+          </div>
+        </section>
+      )}
+      {stage === "cancel" && (
+        <section className="card cancel-form">
+          <h2>Motivo do cancelamento</h2>
+          <form className="form" onSubmit={cancel}>
+            <label>
+              Cancelada por
+              <select
+                value={cancelledBy}
+                onChange={(e) => {
+                  setCancelledBy(e.target.value);
+                  setReason(cancelReasons[e.target.value][0]);
+                }}
+              >
+                <option value="client">Cliente</option>
+                <option value="eleva">ElevaLife</option>
+              </select>
+            </label>
+            <label>
+              Motivo
+              <select
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+              >
+                {cancelReasons[cancelledBy].map((x) => (
+                  <option key={x}>{x}</option>
+                ))}
+              </select>
+            </label>
+            <button className="primary">Registrar cancelamento</button>
+          </form>
+        </section>
+      )}
+      {stage === "collect" && (
+        <>
+          <section className="checkin">
+            <MapPin size={20} />
+            <div>
+              <strong>Aula iniciada e auditada</strong>
+              <span>
+                {location.latitude}, {location.longitude} · precisão{" "}
+                {Math.round(location.accuracy)} m
+              </span>
+            </div>
+          </section>
+          <section className="actions">
+            <button className="primary" onClick={() => setScanner(true)}>
+              <ScanLine size={18} /> Ler QR Code
+            </button>
+            <button className="secondary" onClick={finish}>
+              Encerrar aula
+            </button>
+          </section>
+          <section className="card">
+            <div className="card-heading">
+              <h2>Colaboradores vinculados</h2>
+              <p>Sem registro serão considerados faltantes.</p>
+            </div>
+            <div className="participants">
+              {scoped.map((x) => (
+                <article className="participant" key={x.id}>
+                  <div className="avatar">{x.name[0]}</div>
+                  <div className="person">
+                    <strong>{x.name}</strong>
+                    <span>
+                      {x.registration} · {nameOf(data.sectors, x.sectorId)} ·{" "}
+                      {x.shift}
+                    </span>
+                  </div>
+                  {attendance[x.id]?.status === "present" ? (
+                    <span className="badge present">Presença confirmada</span>
+                  ) : (
+                    <div className="row-actions">
+                      <button onClick={() => setFace(x)}>
+                        <Camera size={17} />
+                      </button>
+                      <button
+                        className="check-button"
+                        onClick={() => register(x, "manual")}
+                      >
+                        <Check size={17} />
+                      </button>
+                    </div>
+                  )}
+                </article>
+              ))}
+            </div>
+          </section>
+        </>
+      )}
+      {stage === "saved" && (
+        <section className="decision card">
+          <h2>Registro concluído.</h2>
+          <p>O status da aula já foi enviado aos indicadores locais.</p>
+          <button className="primary" onClick={() => setStage("new")}>
+            Abrir nova aula
+          </button>
+        </section>
+      )}
+      {scanner && <Scanner onRead={read} onClose={() => setScanner(false)} />}{" "}
+      {face && (
+        <Face
+          person={face}
+          onClose={() => setFace(null)}
+          onDone={(r) => {
+            const p = face;
+            setFace(null);
+            if (r.status === "approved") {
+              register(p, "qr_face");
+              setNotice(`${p.name}: presença confirmada.`);
+            } else setNotice(`${p.name}: confirmação manual necessária.`);
+          }}
+        />
+      )}
+    </section>
+  );
 }
 
 export default function App() {
-  const [participants, setParticipants] = useState(getStoredParticipants);
-  const [attendance, setAttendance] = useState(getStoredAttendance);
-  const [teacher, setTeacher] = useState(() => getStoredItem(loginKey, null));
-  const [auditLogs, setAuditLogs] = useState(() => getStoredItem(auditKey, []));
-  const [classStarted, setClassStarted] = useState(false);
-  const [classLocation, setClassLocation] = useState(null);
-  const [page, setPage] = useState('dashboard');
-  const [scannerOpen, setScannerOpen] = useState(false);
-  const [faceParticipant, setFaceParticipant] = useState(null);
-  const [selectedQr, setSelectedQr] = useState(null);
-  const [formOpen, setFormOpen] = useState(false);
-  const [notice, setNotice] = useState('');
-  const presentCount = useMemo(() => Object.values(attendance).filter((item) => item.status === 'present').length, [attendance]);
-
-  useEffect(() => localStorage.setItem(storageKey, JSON.stringify(attendance)), [attendance]);
-  useEffect(() => localStorage.setItem(participantsKey, JSON.stringify(participants)), [participants]);
-  useEffect(() => localStorage.setItem(auditKey, JSON.stringify(auditLogs)), [auditLogs]);
-
-  const login = (selectedTeacher) => {
-    setTeacher(selectedTeacher);
-    localStorage.setItem(loginKey, JSON.stringify(selectedTeacher));
+  const [data, setData] = useState(() => ({
+    clients: read(K.clients, seed.clients),
+    units: read(K.units, seed.units),
+    sectors: read(K.sectors, seed.sectors),
+    locations: read(K.locations, seed.locations),
+    people: read(K.people, seed.people),
+  }));
+  const [users, setUsers] = useState(() => read(K.users, seed.users)),
+    [classes, setClasses] = useState(() => read(K.classes, [])),
+    [attendance, setAttendance] = useState(() => read(K.attendance, {})),
+    [audit, setAudit] = useState(() => read(K.audit, [])),
+    [user, setUser] = useState(() => read(K.auth, null)),
+    [page, setPage] = useState("dashboard"),
+    [kind, setKind] = useState("clients");
+  useEffect(() => {
+    Object.entries(data).forEach(([k, v]) => write(K[k], v));
+  }, [data]);
+  useEffect(() => write(K.users, users), [users]);
+  useEffect(() => write(K.classes, classes), [classes]);
+  useEffect(() => write(K.attendance, attendance), [attendance]);
+  useEffect(() => write(K.audit, audit), [audit]);
+  if (!user)
+    return (
+      <Login
+        users={users}
+        onLogin={(u) => {
+          setUser(u);
+          write(K.auth, u);
+          setPage(u.role === "professor" ? "collect" : "dashboard");
+        }}
+      />
+    );
+  const nav =
+    user.role === "admin"
+      ? [
+          ["dashboard", BarChart3, "Dashboard"],
+          ["collect", ScanLine, "Coleta de aula"],
+          ["registry", Building2, "Cadastros"],
+          ["users", Users, "Usuários"],
+          ["logs", ClipboardList, "Logs"],
+          ["reports", FileText, "Relatórios"],
+        ]
+      : user.role === "professor"
+        ? [["collect", ScanLine, "Coleta de aula"]]
+        : [["dashboard", BarChart3, "Dashboard"]];
+  const scoped = data.people.filter(
+    (x) => user.role === "admin" || x.clientId === user.clientId,
+  );
+  const report = () => {
+    const csv = [
+        "Nome;Matrícula;Setor;Turno;Status",
+        ...scoped.map(
+          (x) =>
+            `${x.name};${x.registration};${nameOf(data.sectors, x.sectorId)};${x.shift};${attendance[x.id]?.status === "present" ? "Presente" : "Faltante"}`,
+        ),
+      ].join("\n"),
+      a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    a.download = "relatorio-gl.csv";
+    a.click();
   };
-  const logout = () => {
-    localStorage.removeItem(loginKey);
-    setTeacher(null);
-  };
-  const startClass = () => {
-    if (!navigator.geolocation) {
-      setNotice('Este navegador não oferece geolocalização. Abra pelo navegador do celular e permita a localização.');
-      return;
-    }
-    navigator.geolocation.getCurrentPosition((position) => {
-      const location = { latitude: position.coords.latitude.toFixed(5), longitude: position.coords.longitude.toFixed(5), accuracy: position.coords.accuracy };
-      const log = { id: crypto.randomUUID(), event: `Início da aula ${session.id}`, at: new Date().toISOString(), teacherId: teacher.id, teacherName: teacher.name, location };
-      setClassLocation(location);
-      setAuditLogs((current) => [log, ...current]);
-      setClassStarted(true);
-      setNotice('Aula iniciada com horário e localização registrados.');
-    }, () => setNotice('A localização é necessária para iniciar a aula. Verifique a permissão do navegador e tente novamente.'), { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
-  };
-
-  const resolveParticipant = (value) => {
-    const id = value.startsWith('SIGEGL:') ? value.slice(7) : value.trim();
-    return participants.find((p) => p.id === id);
-  };
-  const scanned = (value) => {
-    setScannerOpen(false);
-    const participant = resolveParticipant(value);
-    if (!participant) return setNotice('QR Code inválido ou participante não cadastrado nesta aula.');
-    setFaceParticipant(participant);
-  };
-  const applyFaceResult = (result) => {
-    const participant = faceParticipant;
-    setFaceParticipant(null);
-    if (result.status === 'manual_required') {
-      setNotice(`${participant.name}: ${result.message}`);
-      return;
-    }
-    const status = result.status === 'approved' ? 'present' : 'manual_review';
-    setAttendance((current) => ({ ...current, [participant.id]: { status, method: 'qr_face', at: new Date().toISOString(), teacherId: teacher.id, location: classLocation } }));
-    setNotice(status === 'present' ? `${participant.name}: presença confirmada.` : `${participant.name}: captura registrada para revisão manual.`);
-  };
-  const markPresent = (participant) => setAttendance((current) => ({ ...current, [participant.id]: { status: 'present', method: 'manual', at: new Date().toISOString(), teacherId: teacher.id, location: classLocation } }));
-  const addParticipant = (participant) => {
-    setParticipants((current) => [...current, participant]);
-    setFormOpen(false);
-    setNotice(`${participant.name} foi cadastrado. O QR Code já está disponível.`);
-  };
-
-  if (!teacher) return <Login onLogin={login} />;
-
-  return <main>
-    <nav><div className="brand"><ClipboardCheck /> <span><b>ElevaLife</b> <em>· SIGE GL</em></span></div><div className="user-nav"><span className="offline"><span /> Dados salvos neste dispositivo</span><span className="teacher-name">{teacher.name} · {teacher.id}</span><button onClick={logout} title="Sair"><LogOut size={17} /></button></div></nav>
-    <div className="container">
-      <div className="app-tabs"><button className={page === 'dashboard' ? 'active' : ''} onClick={() => setPage('dashboard')}><BarChart3 size={17} /> Dashboard</button><button className={page === 'attendance' ? 'active' : ''} onClick={() => setPage('attendance')}><LayoutDashboard size={17} /> Coleta da aula</button><button className={page === 'participants' ? 'active' : ''} onClick={() => setPage('participants')}><Users size={17} /> Participantes</button><button className={page === 'audit' ? 'active' : ''} onClick={() => setPage('audit')}><ClipboardList size={17} /> Logs</button></div>
-      {notice && <div className="notice"><Check size={18} /> {notice}<button onClick={() => setNotice('')}><X size={16} /></button></div>}
-      {page === 'dashboard' ? <Dashboard participants={participants} attendance={attendance} /> : page === 'audit' ? <AuditLog logs={auditLogs} /> : page === 'attendance' ? <>
-        <button className="back"><ChevronLeft size={18} /> Aulas</button>
-        <section className="heading"><div><p className="eyebrow">COLETA DE ADESÃO</p><h1>{session.place}</h1><p>{session.company} · {session.time} · {teacher.name}</p></div><div className="counter"><Users size={21} /><strong>{presentCount}/{participants.length}</strong><span>presentes</span></div></section>
-        <section className="checkin"><MapPin size={20} /><div><strong>{classStarted ? 'Aula iniciada e auditada' : 'Inicie a aula no local'}</strong><span>{classStarted ? `Localização registrada: ${classLocation.latitude}, ${classLocation.longitude}` : 'O sistema registra professor, data, hora e geolocalização.'}</span></div>{!classStarted && <button className="primary" onClick={startClass}>Registrar início</button>}</section>
-        <section className="actions"><button className="primary" disabled={!classStarted} onClick={() => setScannerOpen(true)}><ScanLine /> Ler QR Code</button><button className="secondary" onClick={() => setFormOpen(true)}><UserRoundPlus /> Novo participante</button></section>
-        <section className="card"><div className="card-heading"><div><h2>Participantes previstos</h2><p>Leia o QR e valide o rosto, ou marque manualmente.</p></div></div>
-          <div className="participants">{participants.map((participant) => {
-          const entry = attendance[participant.id];
-          return <article className="participant" key={participant.id}><div className="avatar">{participant.name.split(' ').map((name) => name[0]).slice(0, 2).join('')}</div><div className="person"><strong>{participant.name}</strong><span>{participant.id} · {participant.sector} · {participant.shift}</span></div>{entry ? <span className={`badge ${entry.status}`}>{statusLabel(entry.status)}</span> : <div className="row-actions"><button onClick={() => setSelectedQr(participant)} aria-label="Ver QR Code"><QrCode size={19} /></button><button disabled={!classStarted} className="check-button" onClick={() => markPresent(participant)} aria-label="Marcar presença"><Check size={19} /></button></div>}</article>;
-          })}</div>
-        </section>
-        <section className="privacy"><CircleAlert size={18} /><div><strong>Privacidade biométrica</strong><p>As imagens são enviadas ao provedor biométrico somente para a validação e não ficam guardadas neste aplicativo.</p></div></section>
-      </> : <section className="directory"><div className="heading"><div><p className="eyebrow">CADASTRO</p><h1>Participantes</h1><p>Cadastre as pessoas que podem participar das aulas de GL.</p></div><button className="primary" onClick={() => setFormOpen(true)}><Plus size={18} /> Adicionar</button></div><section className="card"><div className="card-heading"><div><h2>{participants.length} participantes ativos</h2><p>O QR Code identifica somente o código interno de cada participante.</p></div></div><div className="participants">{participants.map((participant) => <article className="participant" key={participant.id}><div className="avatar">{participant.name.split(' ').map((name) => name[0]).slice(0, 2).join('')}</div><div className="person"><strong>{participant.name}</strong><span>{participant.id} · {participant.sector} · {participant.shift}</span></div><button className="qr-action" onClick={() => setSelectedQr(participant)}><QrCode size={18} /> QR Code</button></article>)}</div></section></section>}
-    </div>
-    {scannerOpen && <QrScanner onResult={scanned} onClose={() => setScannerOpen(false)} />}
-    {faceParticipant && <FaceCapture participant={faceParticipant} onCaptured={applyFaceResult} onClose={() => setFaceParticipant(null)} />}
-    {formOpen && <ParticipantForm onSave={addParticipant} onClose={() => setFormOpen(false)} />}
-    {selectedQr && <Modal title="QR Code do participante" onClose={() => setSelectedQr(null)}><div className="qr-modal"><QRCodeSVG value={`SIGEGL:${selectedQr.id}`} size={260} includeMargin /><h3>{selectedQr.name}</h3><p>{selectedQr.id}</p></div></Modal>}
-  </main>;
+  return (
+    <main>
+      <nav>
+        <div className="brand">
+          <ClipboardCheck />
+          <span>
+            <b>ElevaLife</b>
+            <em> · SIGE GL</em>
+          </span>
+        </div>
+        <div className="user-nav">
+          <span className="offline">
+            <span />
+            Offline disponível
+          </span>
+          <span className="teacher-name">
+            {user.name} · {roles[user.role]}
+          </span>
+          <button
+            onClick={() => {
+              localStorage.removeItem(K.auth);
+              setUser(null);
+            }}
+          >
+            <LogOut size={17} />
+          </button>
+        </div>
+      </nav>
+      <div className="container">
+        <div className="app-tabs">
+          {nav.map(([v, I, l]) => (
+            <button
+              key={v}
+              className={page === v ? "active" : ""}
+              onClick={() => setPage(v)}
+            >
+              <I size={17} />
+              {l}
+            </button>
+          ))}
+        </div>
+        {page === "dashboard" && (
+          <Dashboard
+            data={data}
+            classes={classes}
+            attendance={attendance}
+            user={user}
+          />
+        )}{" "}
+        {page === "collect" && (
+          <Collect
+            data={data}
+            user={user}
+            classes={classes}
+            setClasses={setClasses}
+            attendance={attendance}
+            setAttendance={setAttendance}
+            audit={audit}
+            setAudit={setAudit}
+          />
+        )}{" "}
+        {page === "registry" && (
+          <>
+            <div className="registry-tabs">
+              {[
+                ["clients", "Clientes"],
+                ["units", "Unidades"],
+                ["sectors", "Setores"],
+                ["locations", "Locais de aula"],
+                ["people", "Colaboradores"],
+              ].map(([v, l]) => (
+                <button
+                  key={v}
+                  className={kind === v ? "active" : ""}
+                  onClick={() => setKind(v)}
+                >
+                  {l}
+                </button>
+              ))}
+            </div>
+            <Registry kind={kind} data={data} setData={setData} />
+          </>
+        )}{" "}
+        {page === "users" && (
+          <UsersPanel users={users} setUsers={setUsers} data={data} />
+        )}{" "}
+        {page === "logs" && (
+          <section className="directory">
+            <section className="heading">
+              <div>
+                <p className="eyebrow">CONFERÊNCIA OPERACIONAL</p>
+                <h1>Log de aulas</h1>
+                <p>Professor, ID, data, horário e geolocalização.</p>
+              </div>
+            </section>
+            <section className="card">
+              <div className="audit-list">
+                {audit.length ? (
+                  audit.map((x) => (
+                    <article key={x.id}>
+                      <MapPin size={19} />
+                      <div>
+                        <strong>
+                          {x.teacherName} · {x.teacherId}
+                        </strong>
+                        <span>
+                          {new Date(x.at).toLocaleString("pt-BR")} · {x.event}
+                        </span>
+                        <small>
+                          {x.location
+                            ? `${x.location.latitude}, ${x.location.longitude} · precisão ${Math.round(x.location.accuracy)} m`
+                            : "Sem localização"}
+                        </small>
+                      </div>
+                    </article>
+                  ))
+                ) : (
+                  <p className="empty">
+                    Nenhuma aula iniciada neste dispositivo.
+                  </p>
+                )}
+              </div>
+            </section>
+          </section>
+        )}{" "}
+        {page === "reports" && (
+          <section className="directory">
+            <section className="heading">
+              <div>
+                <p className="eyebrow">RELATÓRIOS</p>
+                <h1>Relatório de adesão</h1>
+                <p>Exporte para conferência e envio ao cliente.</p>
+              </div>
+              <button className="primary" onClick={report}>
+                <Download size={17} />
+                Baixar CSV
+              </button>
+            </section>
+            <section className="card report-export">
+              <FileText size={34} />
+              <div>
+                <strong>Indicadores mensais de GL</strong>
+                <p>
+                  Presenças, faltas, setor e turno. O arquivo pode ser impresso
+                  pelo navegador.
+                </p>
+              </div>
+            </section>
+          </section>
+        )}
+      </div>
+    </main>
+  );
 }
