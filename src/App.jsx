@@ -120,6 +120,81 @@ const seed = {
     { id: "PL-4", clientId: "C-1", unitId: "U-1", sectorId: "S-2", locationId: "L-2", shift: "2º turno", weekday: 4, time: "14:00" },
   ],
 };
+function demoScenario() {
+  const companies = [
+    {
+      id: "C-DEMO-1", name: "Aurum Alimentos", unit: "Unidade Paulista",
+      sectorNames: ["Administrativo", "Operação"], locationNames: ["Auditório", "Área de produção"],
+      people: ["Anitta", "Lázaro Ramos", "Taís Araújo", "Wagner Moura", "Fernanda Torres", "Seu Jorge", "Ingrid Guimarães", "Juliette Freire", "Cauã Reymond", "Iza"],
+      weekdays: [1, 3, 5], times: ["08:00", "14:00", "17:30"],
+    },
+    {
+      id: "C-DEMO-2", name: "Horizonte Logística", unit: "Centro de Distribuição Guarulhos",
+      sectorNames: ["Expedição", "Armazenagem"], locationNames: ["Pátio logístico", "Sala operacional"],
+      people: ["Paulo Vieira", "Alice Braga", "Rodrigo Santoro", "Dira Paes", "Emicida", "Sabrina Sato", "Daniel Kaluuya", "Viola Davis", "Lupita Nyong'o", "Zendaya"],
+      weekdays: [2, 4, 5], times: ["06:30", "13:30", "21:00"],
+    },
+    {
+      id: "C-DEMO-3", name: "Vértice Tecnologia", unit: "Campus Vila Olímpia",
+      sectorNames: ["Produto e Tecnologia", "Atendimento"], locationNames: ["Hub de inovação", "Sala de convivência"],
+      people: ["Selton Mello", "Débora Nascimento", "Marcos Palmeira", "Adriana Esteves", "Fábio Porchat", "Linn da Quebrada", "Lázaro Ramos Filho", "Rihanna", "Pedro Pascal", "Lupita Amondi"],
+      weekdays: [1, 2, 4, 5], times: ["09:30", "12:30", "16:30", "18:00"],
+    },
+  ];
+  const result = { clients: [], units: [], sectors: [], locations: [], people: [], schedules: [], classes: [], attendance: {}, audit: [] };
+  companies.forEach((company, companyIndex) => {
+    const unitId = `U-DEMO-${companyIndex + 1}`;
+    const sectorIds = [`S-DEMO-${companyIndex + 1}-1`, `S-DEMO-${companyIndex + 1}-2`];
+    const locationIds = [`L-DEMO-${companyIndex + 1}-1`, `L-DEMO-${companyIndex + 1}-2`];
+    result.clients.push({ id: company.id, name: company.name });
+    result.units.push({ id: unitId, clientId: company.id, name: company.unit });
+    company.sectorNames.forEach((name, index) => result.sectors.push({ id: sectorIds[index], unitId, name }));
+    company.locationNames.forEach((name, index) => result.locations.push({ id: locationIds[index], unitId, name }));
+    company.people.forEach((name, index) => {
+      const personId = `P-DEMO-${companyIndex + 1}-${index + 1}`;
+      const status = index < 7 ? "present" : index < 9 ? "absent" : "missing";
+      const sectorIndex = index % 2;
+      result.people.push({
+        id: personId, name, registration: `DEM${companyIndex + 1}${String(index + 1).padStart(3, "0")}`,
+        document: "", clientId: company.id, unitId, sectorId: sectorIds[sectorIndex],
+        locationId: locationIds[sectorIndex], shift: shifts[index % shifts.length],
+      });
+      result.attendance[personId] = {
+        status, method: index < 7 ? (index % 2 ? "qr_face" : "manual") : "manual",
+        at: new Date(Date.now() - (index + companyIndex) * 86400000).toISOString(),
+        teacherId: "PR-1", sectorId: sectorIds[sectorIndex], locationId: locationIds[sectorIndex],
+        shift: shifts[index % shifts.length], roteiro: "Alongamento e mobilidade",
+      };
+    });
+    company.weekdays.forEach((weekday, index) => result.schedules.push({
+      id: `PL-DEMO-${companyIndex + 1}-${index + 1}`, clientId: company.id, unitId,
+      sectorId: sectorIds[index % 2], locationId: locationIds[index % 2],
+      shift: shifts[index % shifts.length], weekday, time: company.times[index],
+    }));
+    Array.from({ length: companyIndex === 2 ? 10 : 8 }, (_, index) => {
+      const applied = index % 5 !== 4;
+      const sectorIndex = index % 2;
+      const at = new Date(Date.now() - (index * 2 + companyIndex) * 86400000).toISOString();
+      const id = `AULA-DEMO-${companyIndex + 1}-${index + 1}`;
+      const certificate = `GL-DEMO${companyIndex + 1}${String(index + 1).padStart(2, "0")}-VALIDADO`;
+      result.classes.push({
+        id, clientId: company.id, unitId, sectorId: sectorIds[sectorIndex], locationId: locationIds[sectorIndex],
+        shift: shifts[index % shifts.length], roteiro: "Alongamento e mobilidade", status: applied ? "applied" : "cancelled",
+        cancelledBy: applied ? undefined : (index % 2 ? "client" : "eleva"),
+        reason: applied ? undefined : (index % 2 ? cancelReasons.client[index % cancelReasons.client.length] : cancelReasons.eleva[0]),
+        at, teacherId: "PR-1", representativeRegistration: applied ? `RESP${companyIndex + 1}${index + 1}` : undefined,
+        certificate: applied ? certificate : undefined,
+      });
+      result.audit.push({
+        id: `LOG-DEMO-${companyIndex + 1}-${index + 1}`, event: applied ? "Aula encerrada e validada pelo representante" : "Aula cancelada",
+        teacherId: "PR-1", teacherName: "Mariana Costa", at,
+        location: { latitude: "-23.55052", longitude: "-46.63331", accuracy: 18 },
+        representativeRegistration: applied ? `RESP${companyIndex + 1}${index + 1}` : undefined, certificate: applied ? certificate : undefined,
+      });
+    });
+  });
+  return result;
+}
 const read = (key, fallback) => {
   try {
     return JSON.parse(localStorage.getItem(key)) ?? fallback;
@@ -1540,6 +1615,27 @@ export default function App() {
   useEffect(() => write(K.attendance, attendance), [attendance]);
   useEffect(() => write(K.audit, audit), [audit]);
   useEffect(() => write(K.schedules, schedules), [schedules]);
+  useEffect(() => {
+    const demoMarker = "gl-demo-scenario-v1";
+    if (localStorage.getItem(demoMarker)) return;
+    const demo = demoScenario();
+    const appendMissing = (current, additions) => [
+      ...current,
+      ...additions.filter((item) => !current.some((existing) => existing.id === item.id)),
+    ];
+    setData((current) => ({
+      clients: appendMissing(current.clients, demo.clients),
+      units: appendMissing(current.units, demo.units),
+      sectors: appendMissing(current.sectors, demo.sectors),
+      locations: appendMissing(current.locations, demo.locations),
+      people: appendMissing(current.people, demo.people),
+    }));
+    setSchedules((current) => appendMissing(current, demo.schedules));
+    setClasses((current) => appendMissing(current, demo.classes));
+    setAttendance((current) => ({ ...demo.attendance, ...current }));
+    setAudit((current) => appendMissing(current, demo.audit));
+    localStorage.setItem(demoMarker, "loaded");
+  }, []);
   useEffect(() => {
     const connect = () => setOnline(true);
     const disconnect = () => setOnline(false);
