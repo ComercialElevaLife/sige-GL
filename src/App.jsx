@@ -21,6 +21,7 @@ import {
   X,
 } from "lucide-react";
 import { verifyFace } from "./biometrics";
+import { generateDashboardReport } from "./report";
 
 const K = {
   users: "gl-users",
@@ -411,6 +412,16 @@ function Dashboard({ data, classes, attendance, user }) {
   );
   const applied = related.filter((x) => x.status === "applied").length,
     cancelled = related.filter((x) => x.status === "cancelled").length;
+  const adherence = people.length ? (done.length / people.length) * 100 : 0;
+  const appliedRate = related.length ? (applied / related.length) * 100 : 0;
+  const downloadPdf = () =>
+    generateDashboardReport({
+      data,
+      people,
+      classes: related,
+      attendance,
+      filter,
+    });
   const groups = (field, list, label) =>
     Object.values(
       people.reduce((out, x) => {
@@ -464,6 +475,9 @@ function Dashboard({ data, classes, attendance, user }) {
           <h1>Adesão da Ginástica Laboral</h1>
           <p>Filtros por cliente, unidade, setor, horário e local de aula.</p>
         </div>
+        <button className="primary dashboard-download" onClick={downloadPdf}>
+          <FileText size={18} /> Relatório em PDF
+        </button>
       </section>
       <Filters
         value={filter}
@@ -515,6 +529,36 @@ function Dashboard({ data, classes, attendance, user }) {
           label={(id) => nameOf(data.sectors, id)}
         />
         <Group title="Adesão por turno" field="shift" label={(x) => x} />
+        <section className="card analytics-summary">
+          <div className="card-heading">
+            <h2>Leitura executiva</h2>
+            <p>Metas mensais e situação operacional.</p>
+          </div>
+          <div className="analytics-body">
+            <div
+              className="donut"
+              style={{ "--value": `${adherence}%` }}
+              aria-label={`Taxa de adesão de ${Math.round(adherence)}%`}
+            >
+              <strong>{Math.round(adherence)}%</strong>
+              <span>adesão</span>
+            </div>
+            <div className="insight-list">
+              <p>
+                <span className={adherence >= 75 ? "ok-dot" : "warn-dot"} />
+                Meta de adesão: <b>75%</b> · atual: <b>{rate(done.length, people.length)}</b>
+              </p>
+              <p>
+                <span className={appliedRate >= 90 ? "ok-dot" : "warn-dot"} />
+                Meta de aulas aplicadas: <b>90%</b> · atual: <b>{rate(applied, related.length)}</b>
+              </p>
+              <p>
+                <span className="wine-dot" />
+                Cancelamentos no recorte: <b>{cancelled}</b>
+              </p>
+            </div>
+          </div>
+        </section>
       </div>
       <section className="card missing-card">
         <div className="card-heading">
@@ -922,11 +966,23 @@ function Collect({
     [notice, setNotice] = useState(""),
     [cancelledBy, setCancelledBy] = useState("client"),
     [reason, setReason] = useState(cancelReasons.client[0]),
-    [location, setLocation] = useState(null);
+    [location, setLocation] = useState(null),
+    [classInfo, setClassInfo] = useState({
+      sectorId: data.sectors[0]?.id || "",
+      locationId: data.locations[0]?.id || "",
+      shift: shifts[0],
+      roteiro: "Alongamento e mobilidade",
+    });
   const clientId = user.clientId || data.clients[0]?.id,
     unitId = user.unitId || data.units.find((x) => x.clientId === clientId)?.id;
   const scoped = data.people.filter(
     (x) => x.clientId === clientId && (!unitId || x.unitId === unitId),
+  );
+  const classPeople = scoped.filter(
+    (x) =>
+      x.sectorId === classInfo.sectorId &&
+      x.locationId === classInfo.locationId &&
+      x.shift === classInfo.shift,
   );
   const start = (given) => {
     if (!given) {
@@ -968,6 +1024,7 @@ function Collect({
         id: newid("AULA"),
         clientId,
         unitId,
+        ...classInfo,
         status: "cancelled",
         cancelledBy,
         reason,
@@ -987,11 +1044,12 @@ function Collect({
         at: new Date().toISOString(),
         teacherId: user.id,
         location,
+        ...classInfo,
       },
     }));
   const read = (value) => {
     setScanner(false);
-    const person = scoped.find(
+    const person = classPeople.find(
       (x) => x.id === (value.startsWith("SIGEGL:") ? value.slice(7) : value),
     );
     if (!person) return setNotice("Colaborador não vinculado ao professor.");
@@ -1004,6 +1062,7 @@ function Collect({
         id: newid("AULA"),
         clientId,
         unitId,
+        ...classInfo,
         status: "applied",
         at: new Date().toISOString(),
         teacherId: user.id,
@@ -1032,8 +1091,38 @@ function Collect({
       )}
       {stage === "new" && (
         <section className="decision card">
-          <h2>A aula foi dada?</h2>
-          <p>Antes de iniciar a coleta, confirme a realização da aula.</p>
+          <h2>Abrir aula</h2>
+          <p>Defina o setor, turno, local e roteiro antes de registrar a realização.</p>
+          <div className="class-fields">
+            <label>
+              Setor
+              <select value={classInfo.sectorId} onChange={(e) => setClassInfo({ ...classInfo, sectorId: e.target.value })}>
+                {data.sectors.filter((item) => item.unitId === unitId).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              </select>
+            </label>
+            <label>
+              Turno
+              <select value={classInfo.shift} onChange={(e) => setClassInfo({ ...classInfo, shift: e.target.value })}>
+                {shifts.map((item) => <option key={item}>{item}</option>)}
+              </select>
+            </label>
+            <label>
+              Local da aula
+              <select value={classInfo.locationId} onChange={(e) => setClassInfo({ ...classInfo, locationId: e.target.value })}>
+                {data.locations.filter((item) => item.unitId === unitId).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              </select>
+            </label>
+            <label>
+              Roteiro da aula
+              <select value={classInfo.roteiro} onChange={(e) => setClassInfo({ ...classInfo, roteiro: e.target.value })}>
+                <option>Alongamento e mobilidade</option>
+                <option>Postura e conscientização corporal</option>
+                <option>Relaxamento e respiração</option>
+                <option>Fortalecimento leve</option>
+              </select>
+            </label>
+          </div>
+          <h3>A aula foi dada?</h3>
           <div>
             <button className="primary" onClick={() => start(true)}>
               Sim, iniciar aula
@@ -1102,7 +1191,7 @@ function Collect({
               <p>Sem registro serão considerados faltantes.</p>
             </div>
             <div className="participants">
-              {scoped.map((x) => (
+              {classPeople.map((x) => (
                 <article className="participant" key={x.id}>
                   <div className="avatar">{x.name[0]}</div>
                   <div className="person">
