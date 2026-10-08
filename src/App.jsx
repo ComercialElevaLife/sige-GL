@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { verifyFace } from "./biometrics";
 import { generateDashboardReport } from "./report";
+import { plannedClassesForMonth, weekdays } from "./scheduling";
 
 const K = {
   users: "gl-users",
@@ -29,6 +30,7 @@ const K = {
   units: "gl-units",
   sectors: "gl-sectors",
   locations: "gl-locations",
+  schedules: "gl-schedules",
   people: "gl-people",
   classes: "gl-classes",
   attendance: "gl-attendance",
@@ -109,6 +111,12 @@ const seed = {
       clientId: "C-1",
       unitId: "U-1",
     },
+  ],
+  schedules: [
+    { id: "PL-1", clientId: "C-1", unitId: "U-1", sectorId: "S-1", locationId: "L-1", shift: "Administrativo", weekday: 1, time: "09:00" },
+    { id: "PL-2", clientId: "C-1", unitId: "U-1", sectorId: "S-1", locationId: "L-1", shift: "Administrativo", weekday: 3, time: "09:00" },
+    { id: "PL-3", clientId: "C-1", unitId: "U-1", sectorId: "S-2", locationId: "L-2", shift: "1º turno", weekday: 2, time: "06:30" },
+    { id: "PL-4", clientId: "C-1", unitId: "U-1", sectorId: "S-2", locationId: "L-2", shift: "2º turno", weekday: 4, time: "14:00" },
   ],
 };
 const read = (key, fallback) => {
@@ -381,7 +389,7 @@ function Filters({
   );
 }
 
-function Dashboard({ data, classes, attendance, user }) {
+function Dashboard({ data, schedules, classes, attendance, user }) {
   const [filter, setFilter] = useState({
       clientId: user.clientId || "",
       unitId: "",
@@ -412,8 +420,15 @@ function Dashboard({ data, classes, attendance, user }) {
   );
   const applied = related.filter((x) => x.status === "applied").length,
     cancelled = related.filter((x) => x.status === "cancelled").length;
+  const planned = plannedClassesForMonth(schedules, {
+    clientId: user.clientId || filter.clientId,
+    unitId: filter.unitId,
+    sectorId: filter.sectorId,
+    shift: filter.shift,
+    locationId: filter.locationId,
+  });
   const adherence = people.length ? (done.length / people.length) * 100 : 0;
-  const appliedRate = related.length ? (applied / related.length) * 100 : 0;
+  const appliedRate = planned ? (applied / planned) * 100 : 0;
   const downloadPdf = () =>
     generateDashboardReport({
       data,
@@ -421,6 +436,7 @@ function Dashboard({ data, classes, attendance, user }) {
       classes: related,
       attendance,
       filter,
+      planned,
     });
   const groups = (field, list, label) =>
     Object.values(
@@ -511,15 +527,15 @@ function Dashboard({ data, classes, attendance, user }) {
         </article>
         <article>
           <span>Aulas aplicadas</span>
-          <strong>{rate(applied, related.length)}</strong>
+          <strong>{rate(applied, planned)}</strong>
           <small>
-            {applied}/{related.length} · meta: 90%
+            {applied}/{planned} previstas · meta: 90%
           </small>
         </article>
         <article>
           <span>Cancelamentos</span>
           <strong>{cancelled}</strong>
-          <small>{rate(cancelled, related.length)} das aulas</small>
+          <small>{rate(cancelled, planned)} das aulas previstas</small>
         </article>
       </div>
       <div className="report-grid">
@@ -550,7 +566,7 @@ function Dashboard({ data, classes, attendance, user }) {
               </p>
               <p>
                 <span className={appliedRate >= 90 ? "ok-dot" : "warn-dot"} />
-                Meta de aulas aplicadas: <b>90%</b> · atual: <b>{rate(applied, related.length)}</b>
+                Meta de aulas aplicadas: <b>90%</b> · atual: <b>{rate(applied, planned)}</b>
               </p>
               <p>
                 <span className="wine-dot" />
@@ -1250,6 +1266,42 @@ function Collect({
   );
 }
 
+function Planning({ data, schedules, setSchedules }) {
+  const [form, setForm] = useState({
+    clientId: data.clients[0]?.id || "",
+    unitId: data.units[0]?.id || "",
+    sectorId: data.sectors[0]?.id || "",
+    locationId: data.locations[0]?.id || "",
+    shift: shifts[0],
+    weekday: 1,
+    time: "09:00",
+  });
+  const clientSchedules = schedules.filter((item) => item.clientId === form.clientId);
+  const planned = plannedClassesForMonth(clientSchedules, { clientId: form.clientId });
+  const save = (event) => {
+    event.preventDefault();
+    setSchedules((current) => [...current, { ...form, id: newid("PL") }]);
+  };
+  return <section className="directory">
+    <section className="heading">
+      <div><p className="eyebrow">PLANEJAMENTO MENSAL</p><h1>Aulas previstas</h1><p>Cada linha representa uma aula recorrente. O sistema conta apenas os dias úteis do mês.</p></div>
+      <div className="planned-counter"><strong>{planned}</strong><span>aulas previstas no mês</span></div>
+    </section>
+    <section className="planning-grid">
+      <section className="card planning-form"><h2>Programar aula recorrente</h2><form className="form" onSubmit={save}>
+        <label>Cliente / empresa<select value={form.clientId} onChange={(e) => setForm({ ...form, clientId: e.target.value, unitId: "", sectorId: "", locationId: "" })}>{data.clients.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+        <label>Unidade<select value={form.unitId} onChange={(e) => setForm({ ...form, unitId: e.target.value, sectorId: "", locationId: "" })}>{data.units.filter((item) => item.clientId === form.clientId).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+        <label>Setor<select value={form.sectorId} onChange={(e) => setForm({ ...form, sectorId: e.target.value })}>{data.sectors.filter((item) => item.unitId === form.unitId).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+        <label>Local da aula<select value={form.locationId} onChange={(e) => setForm({ ...form, locationId: e.target.value })}>{data.locations.filter((item) => item.unitId === form.unitId).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+        <label>Turno<select value={form.shift} onChange={(e) => setForm({ ...form, shift: e.target.value })}>{shifts.map((item) => <option key={item}>{item}</option>)}</select></label>
+        <div className="planning-inline"><label>Dia útil da semana<select value={form.weekday} onChange={(e) => setForm({ ...form, weekday: Number(e.target.value) })}>{weekdays.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label>Horário<input type="time" value={form.time} onChange={(e) => setForm({ ...form, time: e.target.value })}/></label></div>
+        <button className="primary full"><Plus size={17}/> Adicionar aula prevista</button>
+      </form><p className="planning-help">Para duas ou mais aulas no mesmo dia, adicione uma linha para cada horário.</p></section>
+      <section className="card"><div className="card-heading"><h2>Grade programada</h2><p>{clientSchedules.length} recorrência(s) cadastrada(s).</p></div><div className="schedule-list">{clientSchedules.map((item) => <article key={item.id}><div><strong>{weekdays.find((day) => day.value === Number(item.weekday))?.label} · {item.time}</strong><span>{nameOf(data.units, item.unitId)} · {nameOf(data.sectors, item.sectorId)} · {item.shift}</span><small>{nameOf(data.locations, item.locationId)}</small></div><button className="danger-button" onClick={() => setSchedules((current) => current.filter((schedule) => schedule.id !== item.id))}><Trash2 size={17}/></button></article>)}</div></section>
+    </section>
+  </section>;
+}
+
 export default function App() {
   const [data, setData] = useState(() => ({
     clients: read(K.clients, seed.clients),
@@ -1259,6 +1311,7 @@ export default function App() {
     people: read(K.people, seed.people),
   }));
   const [users, setUsers] = useState(() => read(K.users, seed.users)),
+    [schedules, setSchedules] = useState(() => read(K.schedules, seed.schedules)),
     [classes, setClasses] = useState(() => read(K.classes, [])),
     [attendance, setAttendance] = useState(() => read(K.attendance, {})),
     [audit, setAudit] = useState(() => read(K.audit, [])),
@@ -1272,6 +1325,7 @@ export default function App() {
   useEffect(() => write(K.classes, classes), [classes]);
   useEffect(() => write(K.attendance, attendance), [attendance]);
   useEffect(() => write(K.audit, audit), [audit]);
+  useEffect(() => write(K.schedules, schedules), [schedules]);
   if (!user)
     return (
       <Login
@@ -1288,6 +1342,7 @@ export default function App() {
       ? [
           ["dashboard", BarChart3, "Dashboard"],
           ["collect", ScanLine, "Coleta de aula"],
+          ["planning", ClipboardCheck, "Aulas previstas"],
           ["registry", Building2, "Cadastros"],
           ["users", Users, "Usuários"],
           ["logs", ClipboardList, "Logs"],
@@ -1356,6 +1411,7 @@ export default function App() {
         {page === "dashboard" && (
           <Dashboard
             data={data}
+            schedules={schedules}
             classes={classes}
             attendance={attendance}
             user={user}
@@ -1372,6 +1428,9 @@ export default function App() {
             audit={audit}
             setAudit={setAudit}
           />
+        )}{" "}
+        {page === "planning" && (
+          <Planning data={data} schedules={schedules} setSchedules={setSchedules} />
         )}{" "}
         {page === "registry" && (
           <>
