@@ -16,7 +16,7 @@ const json = (body, status = 200) => ({
 const configurationError = (error) => json({ error: error.message }, 503);
 
 async function userFrom(request) {
-  const token = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
+  const token = request.headers.get("x-sige-session") || request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
   if (!token) throw new Error("Sessão não informada.");
   await sessionStore();
   const result = await query(

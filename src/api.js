@@ -2,7 +2,9 @@ const API_BASE = import.meta.env.VITE_API_BASE || "/api";
 
 async function request(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
-    headers: { "content-type": "application/json", ...(options.token ? { authorization: `Bearer ${options.token}` } : {}) },
+    // Static Web Apps reserva o cabeçalho Authorization para a própria plataforma.
+    // A sessão do SIGE segue em um cabeçalho próprio para chegar intacta à API.
+    headers: { "content-type": "application/json", ...(options.token ? { "x-sige-session": options.token } : {}) },
     ...options,
   });
   const body = await response.json().catch(() => ({}));
