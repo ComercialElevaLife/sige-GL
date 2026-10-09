@@ -1306,6 +1306,7 @@ function Collect({
     [reason, setReason] = useState(cancelReasons.client[0]),
     [location, setLocation] = useState(null),
     [representativeRegistration, setRepresentativeRegistration] = useState(""),
+    [representativeConfirmed, setRepresentativeConfirmed] = useState(false),
     [classInfo, setClassInfo] = useState({
       sectorId: data.sectors[0]?.id || "",
       locationId: data.locations[0]?.id || "",
@@ -1353,6 +1354,7 @@ function Collect({
         setEntryMode("");
         setScanFailures(0);
         setRepresentativeRegistration("");
+        setRepresentativeConfirmed(false);
         setAudit((a) => [
           {
             id: newid("LOG"),
@@ -1434,6 +1436,10 @@ function Collect({
       setNotice("Informe a matrícula do representante do local para encerrar a aula.");
       return;
     }
+    if (!representativeConfirmed) {
+      setNotice("Peça ao representante do local para confirmar a realização da aula.");
+      return;
+    }
     const at = new Date().toISOString();
     const id = newid("AULA");
     const certificate = await certificateFor({
@@ -1443,6 +1449,7 @@ function Collect({
       unitId,
       classInfo,
       representativeRegistration: representativeRegistration.trim(),
+      representativeConfirmed,
       at,
       location,
     });
@@ -1665,6 +1672,10 @@ function Collect({
           <label>
             Matrícula do representante
             <input autoFocus value={representativeRegistration} onChange={(event) => setRepresentativeRegistration(event.target.value)} placeholder="Digite a matrícula" />
+          </label>
+          <label className="confirmation-check">
+            <input type="checkbox" checked={representativeConfirmed} onChange={(event) => setRepresentativeConfirmed(event.target.checked)} />
+            Confirmo que a aula foi realizada neste local.
           </label>
           <div>
             <button className="secondary" onClick={() => setStage("collect")}>Voltar à lista</button>
