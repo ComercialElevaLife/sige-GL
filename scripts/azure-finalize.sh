@@ -4,6 +4,7 @@ set -euo pipefail
 RESOURCE_GROUP="rg-sige-ergo-prod"
 POSTGRES_SERVER="psql-sige-gl-prod"
 STATIC_APP="sige-ergo-elevalife-prod"
+APP_PUBLIC_URL="https://white-glacier-081c39d0f.4.azurestaticapps.net"
 POSTGRES_HOST="${POSTGRES_SERVER}.postgres.database.azure.com"
 POSTGRES_USER="sigeadmin"
 CONNECTION="host=$POSTGRES_HOST port=5432 dbname=postgres user=$POSTGRES_USER sslmode=require"
@@ -25,7 +26,7 @@ DB_PASSWORD_ENCODED="$(python3 -c 'import os, urllib.parse; print(urllib.parse.q
 JWT_SECRET="$(openssl rand -hex 48)"
 
 echo "Configurando a API Azure..."
-az staticwebapp appsettings set --name "$STATIC_APP" --resource-group "$RESOURCE_GROUP" --setting-names "POSTGRES_CONNECTION_STRING=postgresql://$POSTGRES_USER:$DB_PASSWORD_ENCODED@$POSTGRES_HOST:5432/postgres?sslmode=require" "AUTH_JWT_SECRET=$JWT_SECRET" "POSTGRES_SSL=true" --output none
+az staticwebapp appsettings set --name "$STATIC_APP" --resource-group "$RESOURCE_GROUP" --setting-names "POSTGRES_CONNECTION_STRING=postgresql://$POSTGRES_USER:$DB_PASSWORD_ENCODED@$POSTGRES_HOST:5432/postgres?sslmode=require" "AUTH_JWT_SECRET=$JWT_SECRET" "POSTGRES_SSL=true" "APP_PUBLIC_URL=$APP_PUBLIC_URL" --output none
 
 read -r -p "E-mail do administrador SIGE: " ADMIN_EMAIL
 read -r -s -p "Defina a senha desse administrador: " ADMIN_PASSWORD

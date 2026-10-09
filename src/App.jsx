@@ -24,7 +24,19 @@ import {
 import { verifyFace } from "./biometrics";
 import { generateDashboardReport } from "./report";
 import { plannedClassesForMonth, weekdays } from "./scheduling";
-import { centralBootstrap, centralLogin, centralSync } from "./api";
+import {
+  centralActivate,
+  centralBootstrap,
+  centralCreateUser,
+  centralDeleteUser,
+  centralLogin,
+  centralRequestReset,
+  centralResetPassword,
+  centralReinviteUser,
+  centralSync,
+  centralUpdateUser,
+  centralUsers,
+} from "./api";
 
 const K = {
   users: "gl-users",
@@ -229,7 +241,7 @@ const normalizeUser = (user) => {
     return { ...professor, clientIds: [...new Set(user.clientIds || (clientId ? [clientId] : []))] };
   }
   const { clientIds, ...client } = user;
-  return { ...client, clientId: user.clientId || "" };
+  return { ...client, clientId: user.clientId || user.clientIds?.[0] || "" };
 };
 const userCompaniesLabel = (user, clients) => {
   if (user.role === "admin") return "Sem empresa vinculada";
@@ -261,11 +273,15 @@ function Modal({ title, onClose, children }) {
     </div>
   );
 }
-function Login({ users, onLogin, onCentralLogin, setUsers }) {
+function Login({ users, onLogin, onCentralLogin, onActivate, onRequestReset, onResetPassword, setUsers }) {
+  const accessLink = new URLSearchParams(window.location.search),
+    invitation = accessLink.get("invite"),
+    resetToken = accessLink.get("reset"),
+    linkedPassword = Boolean(invitation || resetToken);
   const [email, setEmail] = useState(""),
     [password, setPassword] = useState(""),
     [error, setError] = useState(""),
-    [mode, setMode] = useState("login"),
+    [mode, setMode] = useState(linkedPassword ? "first" : "login"),
     [message, setMessage] = useState("");
   const submit = async (e) => {
     e.preventDefault();
@@ -286,8 +302,21 @@ function Login({ users, onLogin, onCentralLogin, setUsers }) {
     if (!user) return setError("E-mail ou senha inválidos.");
     onLogin(user);
   };
-  const firstAccess = (e) => {
+  const firstAccess = async (e) => {
     e.preventDefault();
+    if (linkedPassword) {
+      try {
+        if (invitation) await onActivate(invitation, password);
+        else await onResetPassword(resetToken, password);
+        window.history.replaceState({}, "", window.location.pathname);
+        setMessage("Senha definida. Entre com o seu e-mail.");
+        setMode("login");
+        setPassword("");
+      } catch (remoteError) {
+        setError(remoteError.message);
+      }
+      return;
+    }
     const user = users.find((x) => x.email.toLowerCase() === email.toLowerCase());
     if (!user) return setError("Não localizamos este e-mail.");
     if (password.length < 8) return setError("Crie uma senha com pelo menos 8 caracteres.");
@@ -302,8 +331,18 @@ function Login({ users, onLogin, onCentralLogin, setUsers }) {
     setMode("login");
     setPassword("");
   };
-  const resetPassword = (e) => {
+  const resetPassword = async (e) => {
     e.preventDefault();
+    if (navigator.onLine) {
+      try {
+        await onRequestReset(email);
+        setError("");
+        setMessage("Se o e-mail estiver cadastrado, você receberá as instruções.");
+      } catch (remoteError) {
+        setError(remoteError.message);
+      }
+      return;
+    }
     const user = users.find((x) => x.email.toLowerCase() === email.toLowerCase());
     if (user) setUsers((current) => current.map((x) => x.id === user.id ? {
       ...x,
@@ -323,12 +362,12 @@ function Login({ users, onLogin, onCentralLogin, setUsers }) {
           </span>
         </div>
         <p className="eyebrow">ACESSO SEGURO</p>
-        <h1>{mode === "login" ? "Gestão de Ginástica Laboral." : mode === "first" ? "Crie sua senha." : "Redefina sua senha."}</h1>
+        <h1>{mode === "login" ? "Gestão de Ginástica Laboral." : mode === "first" ? (resetToken ? "Redefina sua senha." : "Crie sua senha.") : "Redefina sua senha."}</h1>
         <p className="muted">
-          {mode === "login" ? "Acesso por perfil de administrador, professor ou cliente." : mode === "first" ? "Use o e-mail que recebeu o convite de primeiro acesso." : "Informe seu e-mail para receber as instruções."}
+          {mode === "login" ? "Acesso por perfil de administrador, professor ou cliente." : mode === "first" ? "Defina uma senha segura para continuar." : "Informe seu e-mail para receber as instruções."}
         </p>
         <form className="form" onSubmit={action}>
-          <label>
+          {!linkedPassword && <label>
             E-mail
             <input
               value={email}
@@ -336,7 +375,7 @@ function Login({ users, onLogin, onCentralLogin, setUsers }) {
               type="email"
               required
             />
-          </label>
+          </label>}
           {mode !== "reset" && <label>
             {mode === "first" ? "Nova senha" : "Senha"}
             <input
@@ -994,7 +1033,7 @@ function Registry({ kind, data, setData }) {
   );
 }
 
-function UsersPanel({ users, setUsers, data }) {
+function UsersPanel({ users, setUsers, data, token, centralReady }) {
   const blank = () => ({
     name: "",
     email: "",
@@ -1034,7 +1073,7 @@ function UsersPanel({ users, setUsers, data }) {
       ? current.clientIds.filter((id) => id !== clientId)
       : [...current.clientIds, clientId],
   }));
-  const save = (e) => {
+  const save = async (e) => {
     e.preventDefault();
     if (f.role === "professor" && !f.clientIds.length)
       return setFeedback("Selecione ao menos uma empresa para o professor.");
@@ -1052,22 +1091,62 @@ function UsersPanel({ users, setUsers, data }) {
       : f.role === "professor"
         ? { clientIds: f.clientIds }
         : { clientId: f.clientId };
-    const account = editingId
-      ? { ...existing, ...base, ...access }
-      : {
-        ...base,
-        ...access,
-        password: "",
-        activationStatus: "pending",
-        invitationSentAt: new Date().toISOString(),
-      };
-    setUsers((current) => editingId
-      ? current.map((user) => user.id === editingId ? normalizeUser(account) : user)
-      : [...current, normalizeUser(account)]);
-    setOpen(false);
-    setFeedback(editingId
-      ? `Usuário ${account.name} atualizado.`
-      : `Convite de primeiro acesso preparado para ${account.email}.`);
+    try {
+      let account;
+      let invitationUrl;
+      if (centralReady && token) {
+        const payload = {
+          ...base,
+          clientIds: f.role === "admin" ? [] : f.role === "professor" ? f.clientIds : [f.clientId],
+          active: existing?.active,
+        };
+        const remote = editingId
+          ? await centralUpdateUser(token, editingId, payload)
+          : await centralCreateUser(token, payload);
+        account = normalizeUser(remote.user);
+        invitationUrl = remote.invitationUrl;
+      } else {
+        account = editingId
+          ? { ...existing, ...base, ...access }
+          : {
+            ...base,
+            ...access,
+            password: "",
+            activationStatus: "pending",
+            invitationSentAt: new Date().toISOString(),
+          };
+        account = normalizeUser(account);
+      }
+      setUsers((current) => editingId
+        ? current.map((user) => user.id === editingId ? account : user)
+        : [...current, account]);
+      setOpen(false);
+      if (invitationUrl) {
+        navigator.clipboard?.writeText(invitationUrl).catch(() => {});
+        setFeedback(`Usuário criado. O e-mail ainda não está configurado; o link de convite foi copiado.`);
+      } else setFeedback(editingId ? `Usuário ${account.name} atualizado.` : `Convite de primeiro acesso enviado para ${account.email}.`);
+    } catch (remoteError) {
+      setFeedback(remoteError.message);
+    }
+  };
+  const remove = async (account) => {
+    if (!window.confirm(`Excluir o acesso de ${account.name}?`)) return;
+    try {
+      if (centralReady && token) await centralDeleteUser(token, account.id);
+      setUsers((current) => current.filter((item) => item.id !== account.id));
+      setFeedback(`Usuário ${account.name} excluído.`);
+    } catch (remoteError) {
+      setFeedback(remoteError.message);
+    }
+  };
+  const reinvite = async (account) => {
+    try {
+      const remote = await centralReinviteUser(token, account.id);
+      if (remote.invitationUrl) navigator.clipboard?.writeText(remote.invitationUrl).catch(() => {});
+      setFeedback(remote.invitationUrl ? "E-mail não configurado; novo link copiado." : "Novo convite enviado por e-mail.");
+    } catch (remoteError) {
+      setFeedback(remoteError.message);
+    }
   };
   return (
     <section className="directory">
@@ -1100,9 +1179,10 @@ function UsersPanel({ users, setUsers, data }) {
               <button className="row-edit" onClick={() => openEdit(x)} aria-label={`Editar ${x.name}`}>
                 <Pencil size={16} />
               </button>
+              {centralReady && !x.active && <button className="secondary compact" onClick={() => reinvite(x)}>Reenviar convite</button>}
               <button
                 className="danger-button"
-                onClick={() => setUsers((a) => a.filter((y) => y.id !== x.id))}
+                onClick={() => remove(x)}
               >
                 <Trash2 size={17} />
               </button>
@@ -1708,6 +1788,12 @@ export default function App() {
     }, 900);
     return () => window.clearTimeout(syncTimer.current);
   }, [data, schedules, classes, attendance, audit, centralReady, token, user, online]);
+  useEffect(() => {
+    if (!centralReady || !token || user?.role !== "admin") return;
+    centralUsers(token)
+      .then((remote) => setUsers(remote.users.map(normalizeUser)))
+      .catch(() => {});
+  }, [centralReady, token, user?.role]);
   const startCentralSession = async (email, password) => {
     const session = await centralLogin(email, password);
     const centralUser = normalizeUser(session.user);
@@ -1741,6 +1827,9 @@ export default function App() {
           setPage(u.role === "professor" ? "collect" : "dashboard");
         }}
         onCentralLogin={startCentralSession}
+        onActivate={centralActivate}
+        onRequestReset={centralRequestReset}
+        onResetPassword={centralResetPassword}
       />
     );
   const nav =
@@ -1865,7 +1954,7 @@ export default function App() {
           </>
         )}{" "}
         {page === "users" && (
-          <UsersPanel users={users} setUsers={setUsers} data={data} />
+          <UsersPanel users={users} setUsers={setUsers} data={data} token={token} centralReady={centralReady} />
         )}{" "}
         {page === "logs" && (
           <section className="directory">

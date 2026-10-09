@@ -28,7 +28,7 @@ create table if not exists app_user (
   email text not null unique,
   password_hash text not null,
   role text not null check (role in ('admin', 'professor', 'client')),
-  client_ids uuid[] not null default '{}',
+  client_ids text[] not null default '{}',
   active boolean not null default true,
   invitation_token_hash text,
   invitation_expires_at timestamptz,
@@ -110,3 +110,6 @@ create table if not exists app_state (
   updated_by uuid references app_user(id),
   updated_at timestamptz not null default now()
 );
+
+-- Compatibilidade para instalações criadas antes da centralização do PWA.
+alter table app_user alter column client_ids type text[] using client_ids::text[];

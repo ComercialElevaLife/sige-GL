@@ -1,7 +1,11 @@
 import { app } from "@azure/functions";
+import { EmailClient } from "@azure/communication-email";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import { createHash, randomBytes } from "node:crypto";
 import { query } from "./db.js";
+
+let userSchemaReady;
 
 const json = (body, status = 200) => ({
   status,
@@ -22,6 +26,73 @@ function userFrom(request) {
   return jwt.verify(token, secret());
 }
 
+function publicUser(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    role: row.role,
+    clientIds: row.client_ids || [],
+    active: row.active,
+    createdAt: row.created_at,
+  };
+}
+
+function accessToken() {
+  return randomBytes(32).toString("base64url");
+}
+
+function tokenHash(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function requireAdmin(request) {
+  const user = userFrom(request);
+  if (user.role !== "admin") throw new Error("Acesso restrito ao administrador.");
+  return user;
+}
+
+function normalizeClientIds(role, input) {
+  const ids = [...new Set((Array.isArray(input) ? input : []).filter(Boolean))];
+  if (role === "admin") return [];
+  if (role === "professor" && ids.length) return ids;
+  if (role === "client" && ids.length === 1) return ids;
+  throw new Error(role === "professor"
+    ? "Professor deve possuir ao menos uma empresa vinculada."
+    : "Usuário cliente deve possuir uma única empresa vinculada.");
+}
+
+function publicUrl(request, token, kind) {
+  const origin = process.env.APP_PUBLIC_URL || request.headers.get("origin") || "";
+  if (!origin) return null;
+  const url = new URL(origin);
+  url.searchParams.set(kind, token);
+  return url.toString();
+}
+
+async function sendAccessEmail({ to, name, url, subject, intro }) {
+  if (!process.env.AZURE_COMMUNICATION_CONNECTION_STRING || !process.env.EMAIL_SENDER_ADDRESS) {
+    return { sent: false, configured: false };
+  }
+  try {
+    const client = new EmailClient(process.env.AZURE_COMMUNICATION_CONNECTION_STRING);
+    const poller = await client.beginSend({
+      senderAddress: process.env.EMAIL_SENDER_ADDRESS,
+      recipients: { to: [{ address: to, displayName: name }] },
+      content: {
+        subject,
+        plainText: `${intro}\n\nAcesse: ${url}\n\nSe você não solicitou este acesso, ignore esta mensagem.`,
+        html: `<p>Olá, ${name}.</p><p>${intro}</p><p><a href="${url}">Acessar SIGE GL</a></p><p>Se você não solicitou este acesso, ignore esta mensagem.</p>`,
+      },
+    });
+    await poller.pollUntilDone();
+    return { sent: true, configured: true };
+  } catch {
+    // O acesso continua válido: o administrador recebe o link de contingência.
+    return { sent: false, configured: true };
+  }
+}
+
 async function stateStore() {
   await query(`
     create table if not exists app_state (
@@ -31,6 +102,11 @@ async function stateStore() {
       updated_at timestamptz not null default now()
     )
   `);
+}
+
+async function userStore() {
+  userSchemaReady ??= query("alter table app_user alter column client_ids type text[] using client_ids::text[];");
+  await userSchemaReady;
 }
 
 function scopedSnapshot(state, user) {
@@ -103,6 +179,7 @@ app.http("login", {
   handler: async (request) => {
     try {
       const { email, password } = await request.json();
+      await userStore();
       const result = await query(
         "select id, name, email, password_hash, role, client_ids, active from app_user where lower(email) = lower($1)",
         [email],
@@ -125,6 +202,182 @@ app.http("login", {
   },
 });
 
+app.http("activateAccount", {
+  methods: ["POST"],
+  authLevel: "anonymous",
+  route: "auth/activate",
+  handler: async (request) => {
+    try {
+      const { token, password } = await request.json();
+      if (!token || !password || password.length < 8) return json({ error: "Defina uma senha com pelo menos 8 caracteres." }, 400);
+      const result = await query(
+        `select * from app_user
+         where invitation_token_hash = $1 and invitation_expires_at > now()`,
+        [tokenHash(token)],
+      );
+      const account = result.rows[0];
+      if (!account) return json({ error: "Este convite expirou ou já foi utilizado." }, 400);
+      await query(
+        `update app_user set password_hash = $1, active = true,
+         invitation_token_hash = null, invitation_expires_at = null where id = $2`,
+        [await bcrypt.hash(password, 12), account.id],
+      );
+      return json({ message: "Senha definida. Você já pode entrar." });
+    } catch (error) {
+      return configurationError(error);
+    }
+  },
+});
+
+app.http("requestPasswordReset", {
+  methods: ["POST"],
+  authLevel: "anonymous",
+  route: "auth/password-reset",
+  handler: async (request) => {
+    try {
+      const { email } = await request.json();
+      const result = await query("select * from app_user where lower(email) = lower($1) and active", [email || ""]);
+      const account = result.rows[0];
+      if (!account) return json({ message: "Se o e-mail estiver cadastrado, você receberá as instruções." }, 202);
+      const token = accessToken();
+      await query(
+        `update app_user set reset_token_hash = $1,
+         reset_expires_at = now() + interval '60 minutes' where id = $2`,
+        [tokenHash(token), account.id],
+      );
+      const url = publicUrl(request, token, "reset");
+      await sendAccessEmail({
+        to: account.email,
+        name: account.name,
+        url,
+        subject: "Redefinição de senha · SIGE GL",
+        intro: "Recebemos uma solicitação para redefinir sua senha.",
+      });
+      return json({ message: "Se o e-mail estiver cadastrado, você receberá as instruções." }, 202);
+    } catch (error) {
+      return configurationError(error);
+    }
+  },
+});
+
+app.http("resetPassword", {
+  methods: ["POST"],
+  authLevel: "anonymous",
+  route: "auth/reset-password",
+  handler: async (request) => {
+    try {
+      const { token, password } = await request.json();
+      if (!token || !password || password.length < 8) return json({ error: "Defina uma senha com pelo menos 8 caracteres." }, 400);
+      const result = await query(
+        `select * from app_user where reset_token_hash = $1 and reset_expires_at > now()`,
+        [tokenHash(token)],
+      );
+      const account = result.rows[0];
+      if (!account) return json({ error: "Este link expirou ou já foi utilizado." }, 400);
+      await query(
+        `update app_user set password_hash = $1, reset_token_hash = null,
+         reset_expires_at = null where id = $2`,
+        [await bcrypt.hash(password, 12), account.id],
+      );
+      return json({ message: "Senha redefinida. Você já pode entrar." });
+    } catch (error) {
+      return configurationError(error);
+    }
+  },
+});
+
+app.http("users", {
+  methods: ["GET", "POST"],
+  authLevel: "anonymous",
+  route: "users",
+  handler: async (request) => {
+    try {
+      requireAdmin(request);
+      await userStore();
+      if (request.method === "GET") {
+        const result = await query("select id, name, email, role, client_ids, active, created_at from app_user order by name");
+        return json({ users: result.rows.map(publicUser) });
+      }
+      const { name, email, role, clientIds } = await request.json();
+      if (!name?.trim() || !email?.trim() || !["admin", "professor", "client"].includes(role)) {
+        return json({ error: "Nome, e-mail e perfil válido são obrigatórios." }, 400);
+      }
+      const invitation = accessToken();
+      const ids = normalizeClientIds(role, clientIds);
+      const result = await query(
+        `insert into app_user (name, email, password_hash, role, client_ids, active, invitation_token_hash, invitation_expires_at)
+         values ($1, lower($2), $3, $4, $5::text[], false, $6, now() + interval '7 days')
+         returning id, name, email, role, client_ids, active, created_at`,
+        [name.trim(), email.trim(), await bcrypt.hash(accessToken(), 12), role, ids, tokenHash(invitation)],
+      );
+      const account = result.rows[0];
+      const invitationUrl = publicUrl(request, invitation, "invite");
+      const delivery = await sendAccessEmail({
+        to: account.email,
+        name: account.name,
+        url: invitationUrl,
+        subject: "Primeiro acesso · SIGE GL",
+        intro: "Seu acesso ao SIGE GL foi criado. Defina sua senha para começar.",
+      });
+      return json({ user: publicUser(account), invitationUrl: delivery.sent ? undefined : invitationUrl, delivery }, 201);
+    } catch (error) {
+      return configurationError(error);
+    }
+  },
+});
+
+app.http("userById", {
+  methods: ["PATCH", "DELETE", "POST"],
+  authLevel: "anonymous",
+  route: "users/{id}",
+  handler: async (request) => {
+    try {
+      const actor = requireAdmin(request);
+      await userStore();
+      const id = request.params.get("id");
+      if (request.method === "DELETE") {
+        if (id === actor.id) return json({ error: "Não é permitido excluir o próprio acesso." }, 400);
+        await query("delete from app_user where id = $1", [id]);
+        return json({ deleted: true });
+      }
+      if (request.method === "POST") {
+        const found = await query("select * from app_user where id = $1", [id]);
+        const account = found.rows[0];
+        if (!account) return json({ error: "Usuário não encontrado." }, 404);
+        const invitation = accessToken();
+        await query(
+          `update app_user set active = false, invitation_token_hash = $1,
+           invitation_expires_at = now() + interval '7 days' where id = $2`,
+          [tokenHash(invitation), id],
+        );
+        const invitationUrl = publicUrl(request, invitation, "invite");
+        const delivery = await sendAccessEmail({
+          to: account.email,
+          name: account.name,
+          url: invitationUrl,
+          subject: "Novo convite · SIGE GL",
+          intro: "Um novo convite de acesso ao SIGE GL foi gerado. Defina sua senha para continuar.",
+        });
+        return json({ invitationUrl: delivery.sent ? undefined : invitationUrl, delivery });
+      }
+      const { name, email, role, clientIds, active } = await request.json();
+      if (!name?.trim() || !email?.trim() || !["admin", "professor", "client"].includes(role)) {
+        return json({ error: "Nome, e-mail e perfil válido são obrigatórios." }, 400);
+      }
+      const result = await query(
+        `update app_user set name = $1, email = lower($2), role = $3,
+         client_ids = $4::text[], active = $5 where id = $6
+         returning id, name, email, role, client_ids, active, created_at`,
+        [name.trim(), email.trim(), role, normalizeClientIds(role, clientIds), active !== false, id],
+      );
+      if (!result.rows[0]) return json({ error: "Usuário não encontrado." }, 404);
+      return json({ user: publicUser(result.rows[0]) });
+    } catch (error) {
+      return configurationError(error);
+    }
+  },
+});
+
 app.http("bootstrap", {
   methods: ["GET"],
   authLevel: "anonymous",
@@ -138,16 +391,16 @@ app.http("bootstrap", {
         return json({ user, initialized: true, data: scopedSnapshot(snapshot.rows[0].payload, user) });
       }
       const values = user.role === "admin" ? [] : [user.clientIds];
-      const clause = user.role === "admin" ? "" : " where client_id = any($1::uuid[])";
+      const clause = user.role === "admin" ? "" : " where client_id::text = any($1::text[])";
       const [clients, units, sectors, locations, people, schedules, classes, attendance] = await Promise.all([
-        query(user.role === "admin" ? "select * from client order by name" : "select * from client where id = any($1::uuid[]) order by name", values),
+        query(user.role === "admin" ? "select * from client order by name" : "select * from client where id::text = any($1::text[]) order by name", values),
         query(`select * from unit${clause} order by name`, values),
         query(`select * from sector${clause} order by name`, values),
         query(`select * from class_location${clause} order by name`, values),
         query(`select * from person${clause} order by name`, values),
         query(`select * from class_schedule${clause} order by weekday, time`, values),
         query(`select * from class_session${clause} order by occurred_at desc`, values),
-        query(`select a.* from attendance a join person p on p.id = a.person_id${user.role === "admin" ? "" : " where p.client_id = any($1::uuid[])"}`, values),
+        query(`select a.* from attendance a join person p on p.id = a.person_id${user.role === "admin" ? "" : " where p.client_id::text = any($1::text[])"}`, values),
       ]);
       return json({
         user,
