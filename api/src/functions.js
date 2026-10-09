@@ -75,6 +75,18 @@ function publicUrl(request, token, kind) {
 }
 
 async function sendAccessEmail({ to, name, url, subject, intro }) {
+  if (process.env.EMAIL_WEBHOOK_URL) {
+    try {
+      const response = await fetch(process.env.EMAIL_WEBHOOK_URL, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ to, name, subject, intro, url, application: "SIGE GL" }),
+      });
+      return { sent: response.ok, configured: true };
+    } catch {
+      return { sent: false, configured: true };
+    }
+  }
   if (!process.env.AZURE_COMMUNICATION_CONNECTION_STRING || !process.env.EMAIL_SENDER_ADDRESS) {
     return { sent: false, configured: false };
   }
