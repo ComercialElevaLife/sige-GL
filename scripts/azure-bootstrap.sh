@@ -22,11 +22,13 @@ need openssl
 
 echo "SIGE GL · configuração central Azure"
 echo "Os valores de senha não serão exibidos."
+echo "Para compatibilidade com o Azure CLI, use 16+ caracteres sem espaço, +, aspas ou barra invertida."
+echo "Inclua maiúscula, minúscula, número e um destes símbolos: ! @ # % _ -"
 
 read -r -s -p "Defina uma NOVA senha forte para o banco PostgreSQL: " DB_PASSWORD
 echo
-if [[ -z "$DB_PASSWORD" ]]; then
-  echo "Senha vazia. Encerrando."
+if [[ ! "$DB_PASSWORD" =~ ^[A-Za-z0-9!@#%_-]{16,}$ ]]; then
+  echo "Formato de senha inválido. Encerrando sem alterar o banco."
   exit 1
 fi
 
