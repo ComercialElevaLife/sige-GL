@@ -1,11 +1,11 @@
 import { app } from "@azure/functions";
 import { EmailClient } from "@azure/communication-email";
 import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
 import { createHash, randomBytes } from "node:crypto";
 import { query } from "./db.js";
 
 let userSchemaReady;
+let sessionStoreReady;
 
 const json = (body, status = 200) => ({
   status,
@@ -15,15 +15,19 @@ const json = (body, status = 200) => ({
 
 const configurationError = (error) => json({ error: error.message }, 503);
 
-function secret() {
-  if (!process.env.AUTH_JWT_SECRET) throw new Error("Autenticação ainda não configurada.");
-  return process.env.AUTH_JWT_SECRET;
-}
-
-function userFrom(request) {
+async function userFrom(request) {
   const token = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
   if (!token) throw new Error("Sessão não informada.");
-  return jwt.verify(token, secret());
+  await sessionStore();
+  const result = await query(
+    `select u.id, u.name, u.email, u.role, u.client_ids, u.active
+     from app_session s join app_user u on u.id = s.user_id
+     where s.token_hash = $1 and s.expires_at > now() and u.active`,
+    [tokenHash(token)],
+  );
+  const account = result.rows[0];
+  if (!account) throw new Error("Sessão expirada. Entre novamente.");
+  return { id: account.id, name: account.name, email: account.email, role: account.role, clientIds: account.client_ids || [] };
 }
 
 function publicUser(row) {
@@ -46,8 +50,8 @@ function tokenHash(value) {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function requireAdmin(request) {
-  const user = userFrom(request);
+async function requireAdmin(request) {
+  const user = await userFrom(request);
   if (user.role !== "admin") throw new Error("Acesso restrito ao administrador.");
   return user;
 }
@@ -107,6 +111,18 @@ async function stateStore() {
 async function userStore() {
   userSchemaReady ??= query("alter table app_user alter column client_ids type text[] using client_ids::text[];");
   await userSchemaReady;
+}
+
+async function sessionStore() {
+  sessionStoreReady ??= query(`
+    create table if not exists app_session (
+      token_hash text primary key,
+      user_id uuid not null references app_user(id) on delete cascade,
+      expires_at timestamptz not null,
+      created_at timestamptz not null default now()
+    )
+  `);
+  await sessionStoreReady;
 }
 
 function scopedSnapshot(state, user) {
@@ -195,7 +211,14 @@ app.http("login", {
         role: account.role,
         clientIds: account.client_ids || [],
       };
-      return json({ token: jwt.sign(user, secret(), { expiresIn: "8h" }), user });
+      await sessionStore();
+      const token = accessToken();
+      await query(
+        `insert into app_session (token_hash, user_id, expires_at)
+         values ($1, $2, now() + interval '8 hours')`,
+        [tokenHash(token), account.id],
+      );
+      return json({ token, user });
     } catch (error) {
       return configurationError(error);
     }
@@ -292,7 +315,7 @@ app.http("users", {
   route: "users",
   handler: async (request) => {
     try {
-      requireAdmin(request);
+      await requireAdmin(request);
       await userStore();
       if (request.method === "GET") {
         const result = await query("select id, name, email, role, client_ids, active, created_at from app_user order by name");
@@ -332,7 +355,7 @@ app.http("userById", {
   route: "users/{id}",
   handler: async (request) => {
     try {
-      const actor = requireAdmin(request);
+      const actor = await requireAdmin(request);
       await userStore();
       const id = request.params.get("id");
       if (request.method === "DELETE") {
@@ -384,7 +407,7 @@ app.http("bootstrap", {
   route: "bootstrap",
   handler: async (request) => {
     try {
-      const user = userFrom(request);
+      const user = await userFrom(request);
       await stateStore();
       const snapshot = await query("select payload from app_state where id = 1");
       if (snapshot.rows[0]) {
@@ -422,7 +445,7 @@ app.http("sync", {
   route: "sync",
   handler: async (request) => {
     try {
-      const user = userFrom(request);
+      const user = await userFrom(request);
       if (user.role === "client") return json({ error: "Usuário cliente possui acesso somente de visualização." }, 403);
       const { state } = await request.json();
       if (!state || typeof state !== "object") return json({ error: "Estado de sincronização inválido." }, 400);

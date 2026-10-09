@@ -113,3 +113,10 @@ create table if not exists app_state (
 
 -- Compatibilidade para instalações criadas antes da centralização do PWA.
 alter table app_user alter column client_ids type text[] using client_ids::text[];
+
+create table if not exists app_session (
+  token_hash text primary key,
+  user_id uuid not null references app_user(id) on delete cascade,
+  expires_at timestamptz not null,
+  created_at timestamptz not null default now()
+);
