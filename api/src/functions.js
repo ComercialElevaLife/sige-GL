@@ -15,8 +15,8 @@ const json = (body, status = 200) => ({
 
 const configurationError = (error) => json({ error: error.message }, 503);
 
-async function userFrom(request) {
-  const token = request.headers.get("x-sige-session") || request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
+async function userFrom(request, suppliedToken = "") {
+  const token = suppliedToken || request.headers.get("x-sige-session") || request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
   if (!token) throw new Error("Sessão não informada.");
   await sessionStore();
   const result = await query(
@@ -402,12 +402,13 @@ app.http("userById", {
 });
 
 app.http("bootstrap", {
-  methods: ["GET"],
+  methods: ["POST"],
   authLevel: "anonymous",
   route: "bootstrap",
   handler: async (request) => {
     try {
-      const user = await userFrom(request);
+      const { session } = await request.json();
+      const user = await userFrom(request, session);
       await stateStore();
       const snapshot = await query("select payload from app_state where id = 1");
       if (snapshot.rows[0]) {
@@ -445,9 +446,9 @@ app.http("sync", {
   route: "sync",
   handler: async (request) => {
     try {
-      const user = await userFrom(request);
+      const { state, session } = await request.json();
+      const user = await userFrom(request, session);
       if (user.role === "client") return json({ error: "Usuário cliente possui acesso somente de visualização." }, 403);
-      const { state } = await request.json();
       if (!state || typeof state !== "object") return json({ error: "Estado de sincronização inválido." }, 400);
       await stateStore();
       let nextState = state;

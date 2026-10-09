@@ -17,12 +17,14 @@ export const centralLogin = (email, password) => request("/auth/login", {
   body: JSON.stringify({ email, password }),
 });
 
-export const centralBootstrap = (token) => request("/bootstrap", { token });
+export const centralBootstrap = (token) => request("/bootstrap", {
+  method: "POST",
+  body: JSON.stringify({ session: token }),
+});
 
 export const centralSync = (token, state) => request("/sync", {
   method: "POST",
-  token,
-  body: JSON.stringify({ state }),
+  body: JSON.stringify({ state, session: token }),
 });
 
 export const centralUsers = (token) => request("/users", { token });
