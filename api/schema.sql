@@ -101,3 +101,12 @@ create table if not exists sync_queue (
   received_at timestamptz not null default now(),
   processed_at timestamptz
 );
+-- Instantâneo operacional usado pela primeira versão do PWA para manter
+-- cadastros, aulas e indicadores consistentes entre dispositivos. As tabelas
+-- normalizadas acima permanecem a base para a evolução transacional da API.
+create table if not exists app_state (
+  id smallint primary key check (id = 1),
+  payload jsonb not null,
+  updated_by uuid references app_user(id),
+  updated_at timestamptz not null default now()
+);

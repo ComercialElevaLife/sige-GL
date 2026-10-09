@@ -22,6 +22,73 @@ function userFrom(request) {
   return jwt.verify(token, secret());
 }
 
+async function stateStore() {
+  await query(`
+    create table if not exists app_state (
+      id smallint primary key check (id = 1),
+      payload jsonb not null,
+      updated_by uuid references app_user(id),
+      updated_at timestamptz not null default now()
+    )
+  `);
+}
+
+function scopedSnapshot(state, user) {
+  if (user.role === "admin") return state;
+  const allowedClients = new Set(user.clientIds || []);
+  const data = state?.data || {};
+  const people = (data.people || []).filter((item) => allowedClients.has(item.clientId));
+  const personIds = new Set(people.map((item) => item.id));
+  const units = (data.units || []).filter((item) => allowedClients.has(item.clientId));
+  const unitIds = new Set(units.map((item) => item.id));
+  const attendance = Object.fromEntries(
+    Object.entries(state?.attendance || {}).filter(([personId]) => personIds.has(personId)),
+  );
+  return {
+    ...state,
+    data: {
+      clients: (data.clients || []).filter((item) => allowedClients.has(item.id)),
+      units,
+      sectors: (data.sectors || []).filter((item) => unitIds.has(item.unitId)),
+      locations: (data.locations || []).filter((item) => unitIds.has(item.unitId)),
+      people,
+    },
+    schedules: (state?.schedules || []).filter((item) => allowedClients.has(item.clientId)),
+    classes: (state?.classes || []).filter((item) => allowedClients.has(item.clientId)),
+    attendance,
+    // Professor não precisa dos logs operacionais de outros profissionais;
+    // cliente não recebe logs de auditoria.
+    audit: user.role === "professor"
+      ? (state?.audit || []).filter((item) => item.teacherId === user.id)
+      : [],
+  };
+}
+
+function mergeProfessorSnapshot(current, incoming, user) {
+  const allowedClients = new Set(user.clientIds || []);
+  const currentData = current?.data || {};
+  const incomingData = incoming?.data || {};
+  const allowedPeople = new Set(
+    (currentData.people || []).filter((item) => allowedClients.has(item.clientId)).map((item) => item.id),
+  );
+  const incomingPeople = new Set((incomingData.people || []).map((item) => item.id));
+  return {
+    ...current,
+    classes: [
+      ...(current.classes || []).filter((item) => !allowedClients.has(item.clientId)),
+      ...(incoming.classes || []).filter((item) => allowedClients.has(item.clientId)),
+    ],
+    attendance: {
+      ...Object.fromEntries(Object.entries(current.attendance || {}).filter(([personId]) => !allowedPeople.has(personId))),
+      ...Object.fromEntries(Object.entries(incoming.attendance || {}).filter(([personId]) => incomingPeople.has(personId) && allowedPeople.has(personId))),
+    },
+    audit: [
+      ...(current.audit || []).filter((item) => item.teacherId !== user.id),
+      ...(incoming.audit || []).filter((item) => item.teacherId === user.id),
+    ],
+  };
+}
+
 app.http("health", {
   methods: ["GET"],
   authLevel: "anonymous",
@@ -65,6 +132,11 @@ app.http("bootstrap", {
   handler: async (request) => {
     try {
       const user = userFrom(request);
+      await stateStore();
+      const snapshot = await query("select payload from app_state where id = 1");
+      if (snapshot.rows[0]) {
+        return json({ user, initialized: true, data: scopedSnapshot(snapshot.rows[0].payload, user) });
+      }
       const values = user.role === "admin" ? [] : [user.clientIds];
       const clause = user.role === "admin" ? "" : " where client_id = any($1::uuid[])";
       const [clients, units, sectors, locations, people, schedules, classes, attendance] = await Promise.all([
@@ -79,6 +151,7 @@ app.http("bootstrap", {
       ]);
       return json({
         user,
+        initialized: false,
         data: {
           clients: clients.rows, units: units.rows, sectors: sectors.rows, locations: locations.rows,
           people: people.rows, schedules: schedules.rows, classes: classes.rows, attendance: attendance.rows,
@@ -97,14 +170,23 @@ app.http("sync", {
   handler: async (request) => {
     try {
       const user = userFrom(request);
-      const { operations = [] } = await request.json();
-      // The frontend sends immutable audit operations. Full validation and writes
-      // are enabled after the production schema is provisioned.
+      if (user.role === "client") return json({ error: "Usuário cliente possui acesso somente de visualização." }, 403);
+      const { state } = await request.json();
+      if (!state || typeof state !== "object") return json({ error: "Estado de sincronização inválido." }, 400);
+      await stateStore();
+      let nextState = state;
+      if (user.role === "professor") {
+        const stored = await query("select payload from app_state where id = 1");
+        if (!stored.rows[0]) return json({ error: "A base mestre ainda não foi inicializada por um administrador." }, 409);
+        nextState = mergeProfessorSnapshot(stored.rows[0].payload, scopedSnapshot(state, user), user);
+      }
       await query(
-        "insert into sync_queue (user_id, payload, received_at) values ($1, $2::jsonb, now())",
-        [user.id, JSON.stringify(operations)],
+        `insert into app_state (id, payload, updated_by, updated_at)
+         values (1, $1::jsonb, $2, now())
+         on conflict (id) do update set payload = excluded.payload, updated_by = excluded.updated_by, updated_at = now()`,
+        [JSON.stringify(nextState), user.id],
       );
-      return json({ accepted: operations.length, receivedAt: new Date().toISOString() }, 202);
+      return json({ synchronizedAt: new Date().toISOString() }, 202);
     } catch (error) {
       return configurationError(error);
     }

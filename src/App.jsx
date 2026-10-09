@@ -24,6 +24,7 @@ import {
 import { verifyFace } from "./biometrics";
 import { generateDashboardReport } from "./report";
 import { plannedClassesForMonth, weekdays } from "./scheduling";
+import { centralBootstrap, centralLogin, centralSync } from "./api";
 
 const K = {
   users: "gl-users",
@@ -37,6 +38,8 @@ const K = {
   attendance: "gl-attendance",
   audit: "gl-audit",
   auth: "gl-auth",
+  token: "gl-token",
+  outbox: "gl-outbox",
 };
 const roles = {
   admin: "Administrador",
@@ -258,14 +261,23 @@ function Modal({ title, onClose, children }) {
     </div>
   );
 }
-function Login({ users, onLogin, setUsers }) {
-  const [email, setEmail] = useState("admin@elevalife.com.br"),
+function Login({ users, onLogin, onCentralLogin, setUsers }) {
+  const [email, setEmail] = useState(""),
     [password, setPassword] = useState(""),
     [error, setError] = useState(""),
     [mode, setMode] = useState("login"),
     [message, setMessage] = useState("");
-  const submit = (e) => {
+  const submit = async (e) => {
     e.preventDefault();
+    if (navigator.onLine) {
+      try {
+        const session = await onCentralLogin(email, password);
+        if (session) return;
+      } catch (remoteError) {
+        setError(remoteError.message);
+        return;
+      }
+    }
     const user = users.find(
       (x) =>
         x.email.toLowerCase() === email.toLowerCase() &&
@@ -342,7 +354,7 @@ function Login({ users, onLogin, setUsers }) {
           {mode !== "login" && <button onClick={() => { setMode("login"); setError(""); setMessage(""); }}>Voltar para entrar</button>}
           {mode === "login" && <><button onClick={() => { setMode("first"); setError(""); setMessage(""); }}>Primeiro acesso</button><button onClick={() => { setMode("reset"); setError(""); setMessage(""); }}>Esqueci minha senha</button></>}
         </div>
-        {mode === "login" && <p className="login-note">Demonstração: admin@elevalife.com.br · eleva123.</p>}
+        {mode === "login" && <p className="login-note">Use o e-mail e a senha definidos para o seu acesso.</p>}
       </section>
     </main>
   );
@@ -1604,9 +1616,30 @@ export default function App() {
     [attendance, setAttendance] = useState(() => read(K.attendance, {})),
     [audit, setAudit] = useState(() => read(K.audit, [])),
     [user, setUser] = useState(() => read(K.auth, null)),
+    [token, setToken] = useState(() => read(K.token, "")),
+    [centralReady, setCentralReady] = useState(false),
+    [syncStatus, setSyncStatus] = useState("local"),
     [page, setPage] = useState("dashboard"),
     [kind, setKind] = useState("clients"),
     [online, setOnline] = useState(() => navigator.onLine);
+  const restoreStarted = useRef(false);
+  const syncTimer = useRef();
+
+  const snapshot = () => ({ data, schedules, classes, attendance, audit });
+  const applySnapshot = (remote) => {
+    if (!remote?.data) return;
+    setData({
+      clients: remote.data.clients || [],
+      units: remote.data.units || [],
+      sectors: remote.data.sectors || [],
+      locations: remote.data.locations || [],
+      people: remote.data.people || [],
+    });
+    setSchedules(remote.schedules || remote.data.schedules || []);
+    setClasses(remote.classes || remote.data.classes || []);
+    setAttendance(remote.attendance || remote.data.attendance || {});
+    setAudit(remote.audit || []);
+  };
   useEffect(() => {
     Object.entries(data).forEach(([k, v]) => write(K[k], v));
   }, [data]);
@@ -1637,6 +1670,20 @@ export default function App() {
     localStorage.setItem(demoMarker, "loaded");
   }, []);
   useEffect(() => {
+    if (restoreStarted.current || !token || !user || !navigator.onLine) return;
+    restoreStarted.current = true;
+    centralBootstrap(token)
+      .then((remote) => {
+        if (remote.initialized) applySnapshot(remote.data);
+        setCentralReady(true);
+        setSyncStatus(remote.initialized ? "sincronizado" : "pendente");
+      })
+      .catch(() => {
+        // O cache local continua sendo a fonte de trabalho até a conexão voltar.
+        setSyncStatus("offline");
+      });
+  }, [token, user]);
+  useEffect(() => {
     const connect = () => setOnline(true);
     const disconnect = () => setOnline(false);
     window.addEventListener("online", connect);
@@ -1646,6 +1693,43 @@ export default function App() {
       window.removeEventListener("offline", disconnect);
     };
   }, []);
+  useEffect(() => {
+    if (!centralReady || !token || user?.role === "client" || !online) return;
+    window.clearTimeout(syncTimer.current);
+    syncTimer.current = window.setTimeout(async () => {
+      try {
+        await centralSync(token, snapshot());
+        localStorage.removeItem(K.outbox);
+        setSyncStatus("sincronizado");
+      } catch {
+        write(K.outbox, snapshot());
+        setSyncStatus("pendente");
+      }
+    }, 900);
+    return () => window.clearTimeout(syncTimer.current);
+  }, [data, schedules, classes, attendance, audit, centralReady, token, user, online]);
+  const startCentralSession = async (email, password) => {
+    const session = await centralLogin(email, password);
+    const centralUser = normalizeUser(session.user);
+    write(K.token, session.token);
+    setToken(session.token);
+    const remote = await centralBootstrap(session.token);
+    if (remote.initialized) applySnapshot(remote.data);
+    else if (centralUser.role === "admin") {
+      try {
+        await centralSync(session.token, snapshot());
+        localStorage.removeItem(K.outbox);
+      } catch {
+        write(K.outbox, snapshot());
+      }
+    }
+    setCentralReady(true);
+    setSyncStatus(remote.initialized ? "sincronizado" : "pendente");
+    setUser(centralUser);
+    write(K.auth, centralUser);
+    setPage(centralUser.role === "professor" ? "collect" : "dashboard");
+    return session;
+  };
   if (!user)
     return (
       <Login
@@ -1656,6 +1740,7 @@ export default function App() {
           write(K.auth, u);
           setPage(u.role === "professor" ? "collect" : "dashboard");
         }}
+        onCentralLogin={startCentralSession}
       />
     );
   const nav =
@@ -1701,7 +1786,7 @@ export default function App() {
         <div className="user-nav">
           <span className="offline">
             <span />
-            {online ? "Dados salvos neste dispositivo" : "Sem internet · dados protegidos"}
+            {!online ? "Sem internet · dados protegidos" : centralReady ? syncStatus === "sincronizado" ? "Dados sincronizados" : "Sincronização pendente" : "Dados neste dispositivo"}
           </span>
           <span className="teacher-name">
             {user.name} · {roles[user.role]}
@@ -1709,6 +1794,10 @@ export default function App() {
           <button
             onClick={() => {
               localStorage.removeItem(K.auth);
+              localStorage.removeItem(K.token);
+              setToken("");
+              setCentralReady(false);
+              setSyncStatus("local");
               setUser(null);
             }}
           >
