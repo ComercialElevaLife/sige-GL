@@ -48,6 +48,7 @@ const K = {
   sectors: "gl-sectors",
   locations: "gl-locations",
   workShifts: "gl-work-shifts",
+  routines: "gl-routines",
   schedules: "gl-schedules",
   people: "gl-people",
   classes: "gl-classes",
@@ -64,6 +65,7 @@ const roles = {
 };
 const shifts = ["Administrativo", "1º turno", "2º turno", "3º turno"];
 const scaleOptions = ["Sem escala definida", "5x2", "5x3", "6x1", "12x36", "Escala de letras", "Outra"];
+const inactiveReasons = ["Férias", "Desligamento", "Afastamento", "Outro"];
 const cancelReasons = {
   client: [
     "Ausência de pessoal no setor",
@@ -92,6 +94,12 @@ const seed = {
     { id: "T-3", clientId: "C-1", name: "2º turno", start: "14:00", end: "22:00", scale: "6x1" },
     { id: "T-4", clientId: "C-1", name: "3º turno", start: "22:00", end: "06:00", scale: "6x1" },
   ],
+  routines: [
+    { id: "R-1", name: "Alongamento e mobilidade" },
+    { id: "R-2", name: "Postura e conscientização corporal" },
+    { id: "R-3", name: "Relaxamento e respiração" },
+    { id: "R-4", name: "Fortalecimento leve" },
+  ],
   people: [
     ["P-1", "Ana Clara Souza", "M-1001", "S-1", "L-1", "Administrativo"],
     ["P-2", "Bruno Henrique Lima", "M-1002", "S-1", "L-1", "Administrativo"],
@@ -106,6 +114,7 @@ const seed = {
     name,
     registration,
     document: "",
+    active: true,
     clientId: "C-1",
     unitId: "U-1",
     sectorId,
@@ -620,7 +629,7 @@ function Dashboard({ data, schedules, classes, attendance, user }) {
       (!filter.unitId || x.unitId === filter.unitId) &&
       (!filter.sectorId || x.sectorId === filter.sectorId) &&
       (!filter.shift || x.shift === filter.shift) &&
-      (!filter.locationId || x.locationId === filter.locationId),
+      (!filter.locationId || x.locationId === filter.locationId) && x.active !== false,
   );
   const done = people.filter((x) => attendance[x.id]?.status === "present"),
     missing = people.filter((x) => attendance[x.id]?.status !== "present");
@@ -892,7 +901,7 @@ function ExcelImport({ data, setData, setUsers, token, centralReady }) {
       const row = item.row;
       if (type === "clients") { let client = findClient(cell(row, "Empresa")); if (!client) { client = { id: newid("CLI"), name: String(cell(row, "Empresa")).trim() }; next.clients.push(client); } if (cell(row, "Unidade") && !next.units.some((unit) => unit.clientId === client.id && normalize(unit.name) === normalize(cell(row, "Unidade")))) next.units.push({ id: newid("UNI"), clientId: client.id, name: String(cell(row, "Unidade")).trim() }); }
       if (type === "locations") next.locations.push({ id: newid("LOC"), clientId: item.company.id, unitId: item.unit.id, name: String(cell(row, "Local da aula")).trim() });
-      if (type === "people") next.people.push({ id: newid("PES"), name: String(cell(row, "Nome")).trim(), registration: String(cell(row, "Matrícula ou CPF")).trim(), document: "", clientId: item.company.id, unitId: item.unit.id, sectorId: item.sector.id, locationId: item.location.id, shift: String(cell(row, "Turno")).trim() });
+      if (type === "people") next.people.push({ id: newid("PES"), name: String(cell(row, "Nome")).trim(), registration: String(cell(row, "Matrícula ou CPF")).trim(), document: "", active: true, clientId: item.company.id, unitId: item.unit.id, sectorId: item.sector.id, locationId: item.location.id, shift: String(cell(row, "Turno")).trim() });
     });
     if (type === "professors") {
       if (!centralReady || !token) return setMessage("Conecte-se à internet como administrador para importar professores.");
@@ -926,18 +935,21 @@ function Registry({ kind, data, setData }) {
       sectorId: data.sectors[0]?.id || "",
       locationId: data.locations[0]?.id || "",
       shift: shifts[0],
+      active: true,
+      inactiveReason: inactiveReasons[0],
     });
   const title = {
     clients: "Clientes",
     units: "Unidades",
     sectors: "Setores",
     locations: "Locais de aula",
+    routines: "Roteiros de aula",
     people: "Colaboradores",
   }[kind];
   const blank = () => ({
     name: "", registration: "", clientId: data.clients[0]?.id || "",
     unitId: data.units[0]?.id || "", sectorId: data.sectors[0]?.id || "",
-    locationId: data.locations[0]?.id || "", shift: shifts[0],
+    locationId: data.locations[0]?.id || "", shift: shifts[0], active: true, inactiveReason: inactiveReasons[0],
   });
   const openCreate = () => {
     setEditingId(null);
@@ -963,6 +975,8 @@ function Registry({ kind, data, setData }) {
         sectorId: form.sectorId,
         locationId: form.locationId,
         shift: form.shift,
+        active: form.active,
+        inactiveReason: form.active ? "" : form.inactiveReason,
       };
     setData((d) => ({ ...d, [kind]: editingId
       ? d[kind].map((current) => current.id === editingId ? item : current)
@@ -990,7 +1004,7 @@ function Registry({ kind, data, setData }) {
                 <strong>{personLabel(x)}</strong>
                 <span>
                   {kind === "people"
-                    ? `${x.registration} · ${nameOf(data.sectors, x.sectorId)} · ${x.shift}`
+                    ? `${x.registration} · ${nameOf(data.sectors, x.sectorId)} · ${x.shift} · ${x.active === false ? `Inativo: ${x.inactiveReason || "sem motivo"}` : "Ativo"}`
                     : x.id}
                 </span>
               </div>
@@ -1037,6 +1051,14 @@ function Registry({ kind, data, setData }) {
                     }
                   />
                 </label>
+                <label>
+                  Situação
+                  <select value={form.active ? "active" : "inactive"} onChange={(e) => setForm({ ...form, active: e.target.value === "active" })}>
+                    <option value="active">Ativo</option>
+                    <option value="inactive">Inativo</option>
+                  </select>
+                </label>
+                {!form.active && <label>Motivo da inativação<select value={form.inactiveReason} onChange={(e) => setForm({ ...form, inactiveReason: e.target.value })}>{inactiveReasons.map((reason) => <option key={reason}>{reason}</option>)}</select></label>}
               </>
             )}{" "}
             {(kind === "units" || kind === "people") && (
@@ -1400,7 +1422,7 @@ function Collect({
     (x) =>
       x.sectorId === classInfo.sectorId &&
       x.locationId === classInfo.locationId &&
-      x.shift === classInfo.shift,
+      x.shift === classInfo.shift && x.active !== false,
   );
   const start = (given) => {
     if (!given) {
@@ -1601,10 +1623,7 @@ function Collect({
             <label>
               Roteiro da aula
               <select value={classInfo.roteiro} onChange={(e) => setClassInfo({ ...classInfo, roteiro: e.target.value })}>
-                <option>Alongamento e mobilidade</option>
-                <option>Postura e conscientização corporal</option>
-                <option>Relaxamento e respiração</option>
-                <option>Fortalecimento leve</option>
+                {data.routines.map((routine) => <option key={routine.id}>{routine.name}</option>)}
               </select>
             </label>
           </div>
@@ -1775,6 +1794,7 @@ function Collect({
 }
 
 function Planning({ data, schedules, setSchedules }) {
+  const [referenceMonth, setReferenceMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [form, setForm] = useState({
     clientId: data.clients[0]?.id || "",
     unitId: data.units[0]?.id || "",
@@ -1785,15 +1805,17 @@ function Planning({ data, schedules, setSchedules }) {
   });
   const clientSchedules = schedules.filter((item) => item.clientId === form.clientId);
   const availableShiftNames = data.workShifts.filter((item) => item.clientId === form.clientId).map((item) => item.name);
-  const planned = plannedClassesForMonth(clientSchedules, { clientId: form.clientId });
+  const referenceDate = new Date(`${referenceMonth}-01T12:00:00`);
+  const planned = plannedClassesForMonth(clientSchedules, { clientId: form.clientId }, referenceDate);
   const save = (event) => {
     event.preventDefault();
     setSchedules((current) => [...current, { ...form, id: newid("PL") }]);
   };
   return <section className="directory">
     <section className="heading">
-      <div><p className="eyebrow">PLANEJAMENTO MENSAL</p><h1>Aulas previstas</h1><p>Cada linha representa uma aula recorrente. O sistema conta apenas os dias úteis do mês.</p></div>
-      <div className="planned-counter"><strong>{planned}</strong><span>aulas previstas no mês</span></div>
+      <div><p className="eyebrow">PLANEJAMENTO MENSAL</p><h1>Aulas previstas</h1><p>Selecione o mês e o ano. O sistema conta somente os dias úteis desse período.</p></div>
+      <label className="month-picker">Mês de referência<input type="month" value={referenceMonth} onChange={(e) => setReferenceMonth(e.target.value)} /></label>
+      <div className="planned-counter"><strong>{planned}</strong><span>aulas previstas no mês selecionado</span></div>
     </section>
     <section className="planning-grid">
       <section className="card planning-form"><h2>Programar aula recorrente</h2><form className="form" onSubmit={save}>
@@ -1817,6 +1839,7 @@ export default function App() {
     sectors: read(K.sectors, seed.sectors),
     locations: read(K.locations, seed.locations),
     workShifts: read(K.workShifts, seed.workShifts),
+    routines: read(K.routines, seed.routines),
     people: read(K.people, seed.people),
   }));
   const [users, setUsers] = useState(() => read(K.users, seed.users).map(normalizeUser)),
@@ -1843,6 +1866,7 @@ export default function App() {
       sectors: remote.data.sectors || [],
       locations: remote.data.locations || [],
       workShifts: remote.data.workShifts || [],
+      routines: remote.data.routines || [],
       people: remote.data.people || [],
     });
     setSchedules(remote.schedules || remote.data.schedules || []);
