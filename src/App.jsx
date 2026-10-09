@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Html5Qrcode } from "html5-qrcode";
 import { QRCodeSVG } from "qrcode.react";
+import * as XLSX from "xlsx";
 import {
   BarChart3,
   Building2,
@@ -10,6 +11,7 @@ import {
   ClipboardList,
   Download,
   FileText,
+  FileSpreadsheet,
   LogOut,
   MapPin,
   Plus,
@@ -19,6 +21,7 @@ import {
   Pencil,
   UserRoundPlus,
   Users,
+  Upload,
   X,
 } from "lucide-react";
 import { verifyFace } from "./biometrics";
@@ -220,6 +223,7 @@ const read = (key, fallback) => {
 const write = (key, value) => localStorage.setItem(key, JSON.stringify(value));
 const newid = (p) => `${p}-${crypto.randomUUID().slice(0, 8)}`;
 const nameOf = (list, id) => list.find((x) => x.id === id)?.name || "—";
+const personLabel = (person) => person.name?.trim() || `Colaborador ${person.registration || "sem identificação"}`;
 const rate = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : "0%");
 const clientIdsFor = (user) => {
   if (user.role === "admin") return [];
@@ -499,7 +503,6 @@ function Filters({
   units,
   sectors,
   locations,
-  times = [],
   scopeIds = [],
 }) {
   const isRestricted = scopeIds.length > 0;
@@ -514,7 +517,6 @@ function Filters({
             clientId: e.target.value,
             unitId: "",
             sectorId: "",
-            time: "",
             locationId: "",
           })
         }
@@ -535,7 +537,6 @@ function Filters({
             ...value,
             unitId: e.target.value,
             sectorId: "",
-            time: "",
             locationId: "",
           })
         }
@@ -576,13 +577,6 @@ function Filters({
         ))}
       </select>
       <select
-        value={value.time}
-        onChange={(e) => setValue({ ...value, time: e.target.value })}
-      >
-        <option value="">Todos os horários</option>
-        {times.map((time) => <option key={time} value={time}>{time}</option>)}
-      </select>
-      <select
         value={value.locationId}
         onChange={(e) => setValue({ ...value, locationId: e.target.value })}
       >
@@ -606,13 +600,9 @@ function Dashboard({ data, schedules, classes, attendance, user }) {
       unitId: "",
       sectorId: "",
       shift: "",
-      time: "",
       locationId: "",
     }),
     [detail, setDetail] = useState(null);
-  const times = [...new Set(schedules
-    .filter((item) => (!filter.clientId || item.clientId === filter.clientId) && (!filter.unitId || item.unitId === filter.unitId))
-    .map((item) => item.time).filter(Boolean))].sort();
   const people = data.people.filter(
     (x) =>
       (user.role === "admin" || permittedClientIds.includes(x.clientId)) &&
@@ -620,8 +610,7 @@ function Dashboard({ data, schedules, classes, attendance, user }) {
       (!filter.unitId || x.unitId === filter.unitId) &&
       (!filter.sectorId || x.sectorId === filter.sectorId) &&
       (!filter.shift || x.shift === filter.shift) &&
-      (!filter.locationId || x.locationId === filter.locationId) &&
-      (!filter.time || schedules.some((schedule) => schedule.time === filter.time && schedule.clientId === x.clientId && schedule.unitId === x.unitId && schedule.sectorId === x.sectorId && schedule.locationId === x.locationId && schedule.shift === x.shift)),
+      (!filter.locationId || x.locationId === filter.locationId),
   );
   const done = people.filter((x) => attendance[x.id]?.status === "present"),
     missing = people.filter((x) => attendance[x.id]?.status !== "present");
@@ -632,8 +621,7 @@ function Dashboard({ data, schedules, classes, attendance, user }) {
       (!filter.unitId || x.unitId === filter.unitId) &&
       (!filter.sectorId || x.sectorId === filter.sectorId) &&
       (!filter.shift || x.shift === filter.shift) &&
-      (!filter.locationId || x.locationId === filter.locationId) &&
-      (!filter.time || x.time === filter.time),
+      (!filter.locationId || x.locationId === filter.locationId),
   );
   const applied = related.filter((x) => x.status === "applied").length,
     cancelled = related.filter((x) => x.status === "cancelled").length;
@@ -646,15 +634,20 @@ function Dashboard({ data, schedules, classes, attendance, user }) {
   });
   const adherence = people.length ? (done.length / people.length) * 100 : 0;
   const appliedRate = planned ? (applied / planned) * 100 : 0;
-  const downloadPdf = () =>
-    generateDashboardReport({
-      data,
-      people,
-      classes: related,
-      attendance,
-      filter,
-      planned,
-    });
+  const downloadPdf = () => {
+    try {
+      generateDashboardReport({
+        data,
+        people,
+        classes: related,
+        attendance,
+        filter,
+        planned,
+      });
+    } catch (error) {
+      window.alert("Não foi possível gerar o PDF. Atualize a página e tente novamente.");
+    }
+  };
   const groups = (field, list, label) =>
     Object.values(
       people.reduce((out, x) => {
@@ -706,7 +699,7 @@ function Dashboard({ data, schedules, classes, attendance, user }) {
         <div>
           <p className="eyebrow">DASHBOARD DE INDICADORES</p>
           <h1>Adesão da Ginástica Laboral</h1>
-          <p>Filtros por cliente, unidade, setor, horário e local de aula.</p>
+          <p>Filtros por cliente, unidade, setor, turno e local de aula.</p>
         </div>
         <button className="primary dashboard-download" onClick={downloadPdf}>
           <FileText size={18} /> Relatório em PDF
@@ -719,7 +712,6 @@ function Dashboard({ data, schedules, classes, attendance, user }) {
         units={data.units}
         sectors={data.sectors}
         locations={data.locations}
-        times={times}
         scopeIds={permittedClientIds}
       />
       <div className="metrics">
@@ -818,9 +810,9 @@ function Dashboard({ data, schedules, classes, attendance, user }) {
           <div className="participants">
             {detail.people.map((x) => (
               <article className="participant" key={x.id}>
-                <div className="avatar">{x.name[0]}</div>
+                <div className="avatar">{personLabel(x)[0]}</div>
                 <div className="person">
-                  <strong>{x.name}</strong>
+                  <strong>{personLabel(x)}</strong>
                   <span>{x.registration}</span>
                 </div>
                 <span
@@ -839,13 +831,68 @@ function Dashboard({ data, schedules, classes, attendance, user }) {
   );
 }
 
+function ExcelImport({ data, setData, setUsers, token, centralReady }) {
+  const models = {
+    clients: { label: "Empresas e unidades", headers: ["Empresa", "Unidade"], example: { Empresa: "Empresa Exemplo", Unidade: "Unidade Central" } },
+    locations: { label: "Locais de aula", headers: ["Empresa", "Unidade", "Local da aula"], example: { Empresa: "Empresa Exemplo", Unidade: "Unidade Central", "Local da aula": "Auditório" } },
+    people: { label: "Colaboradores", headers: ["Nome", "Matrícula ou CPF", "Empresa", "Unidade", "Setor", "Local da aula", "Turno"], example: { Nome: "Maria Silva", "Matrícula ou CPF": "12345", Empresa: "Empresa Exemplo", Unidade: "Unidade Central", Setor: "Administrativo", "Local da aula": "Auditório", Turno: "Administrativo" } },
+    professors: { label: "Professores", headers: ["Nome", "E-mail", "Empresas"], example: { Nome: "Nome do professor", "E-mail": "professor@exemplo.com", Empresas: "Empresa Exemplo" } },
+  };
+  const [type, setType] = useState("people"), [preview, setPreview] = useState(null), [message, setMessage] = useState("");
+  const normalize = (value) => String(value || "").trim().toLocaleLowerCase("pt-BR");
+  const cell = (row, name) => row[Object.keys(row).find((key) => normalize(key) === normalize(name))] ?? "";
+  const template = () => {
+    const model = models[type]; const book = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet([model.example], { header: model.headers }), "Importação");
+    XLSX.writeFile(book, `modelo-sige-gl-${type}.xlsx`);
+  };
+  const analyze = async (event) => {
+    const file = event.target.files?.[0]; if (!file) return;
+    const book = XLSX.read(await file.arrayBuffer(), { type: "array" });
+    const rows = XLSX.utils.sheet_to_json(book.Sheets[book.SheetNames[0]], { defval: "" });
+    const checked = rows.map((row, index) => {
+      const company = data.clients.find((item) => normalize(item.name) === normalize(cell(row, "Empresa")));
+      const unit = data.units.find((item) => item.clientId === company?.id && normalize(item.name) === normalize(cell(row, "Unidade")));
+      const sector = data.sectors.find((item) => item.unitId === unit?.id && normalize(item.name) === normalize(cell(row, "Setor")));
+      const location = data.locations.find((item) => item.unitId === unit?.id && normalize(item.name) === normalize(cell(row, "Local da aula")));
+      let error = "";
+      if (type === "clients" && !cell(row, "Empresa")) error = "Empresa é obrigatória.";
+      if (type === "locations" && (!company || !unit || !cell(row, "Local da aula"))) error = "Empresa, unidade ou local não localizado.";
+      if (type === "people" && (!cell(row, "Matrícula ou CPF") || !company || !unit || !sector || !location || !cell(row, "Turno"))) error = "Confira matrícula/CPF, empresa, unidade, setor, local e turno.";
+      if (type === "professors" && (!cell(row, "Nome") || !cell(row, "E-mail") || !cell(row, "Empresas"))) error = "Nome, e-mail e empresas são obrigatórios.";
+      return { row, index: index + 2, error, company, unit, sector, location };
+    });
+    setPreview({ rows: checked, file: file.name }); event.target.value = "";
+  };
+  const apply = async () => {
+    const valid = preview.rows.filter((item) => !item.error); if (!valid.length) return;
+    const next = { ...data, clients: [...data.clients], units: [...data.units], locations: [...data.locations], people: [...data.people] };
+    const findClient = (name) => next.clients.find((item) => normalize(item.name) === normalize(name));
+    valid.forEach((item) => {
+      const row = item.row;
+      if (type === "clients") { let client = findClient(cell(row, "Empresa")); if (!client) { client = { id: newid("CLI"), name: String(cell(row, "Empresa")).trim() }; next.clients.push(client); } if (cell(row, "Unidade") && !next.units.some((unit) => unit.clientId === client.id && normalize(unit.name) === normalize(cell(row, "Unidade")))) next.units.push({ id: newid("UNI"), clientId: client.id, name: String(cell(row, "Unidade")).trim() }); }
+      if (type === "locations") next.locations.push({ id: newid("LOC"), clientId: item.company.id, unitId: item.unit.id, name: String(cell(row, "Local da aula")).trim() });
+      if (type === "people") next.people.push({ id: newid("PES"), name: String(cell(row, "Nome")).trim(), registration: String(cell(row, "Matrícula ou CPF")).trim(), document: "", clientId: item.company.id, unitId: item.unit.id, sectorId: item.sector.id, locationId: item.location.id, shift: String(cell(row, "Turno")).trim() });
+    });
+    if (type === "professors") {
+      if (!centralReady || !token) return setMessage("Conecte-se à internet como administrador para importar professores.");
+      const imported = await Promise.all(valid.map(async (item) => {
+        const ids = String(cell(item.row, "Empresas")).split(";").map((name) => data.clients.find((client) => normalize(client.name) === normalize(name))?.id).filter(Boolean);
+        return centralCreateUser(token, { name: String(cell(item.row, "Nome")).trim(), email: String(cell(item.row, "E-mail")).trim(), role: "professor", clientIds: ids });
+      }));
+      setUsers((current) => [...current, ...imported.map((item) => normalizeUser(item.user))]);
+    } else setData(next);
+    setMessage(`${valid.length} registro(s) importado(s) com sucesso.`); setPreview(null);
+  };
+  return <section className="directory"><section className="heading"><div><p className="eyebrow">IMPORTAÇÃO ASSISTIDA</p><h1>Importar planilha</h1><p>Baixe o modelo, preencha e confira todos os dados antes de gravar.</p></div></section><section className="card" style={{ padding: 22 }}><div className="form"><label>O que deseja importar?<select value={type} onChange={(e) => { setType(e.target.value); setPreview(null); }}>{Object.entries(models).map(([key, model]) => <option key={key} value={key}>{model.label}</option>)}</select></label><button className="secondary" onClick={template}><Download size={17}/> Baixar modelo</button><label>Escolha a planilha preenchida<input type="file" accept=".xlsx,.xls,.csv" onChange={analyze}/></label></div>{message && <p className="notice">{message}</p>}</section>{preview && <Modal title="Conferir importação" onClose={() => setPreview(null)}><p className="muted">Arquivo: {preview.file}. Linhas verdes serão importadas; linhas com aviso ficam de fora.</p><div className="participants">{preview.rows.map((item) => <article className="participant" key={item.index}><div className="avatar">{item.index}</div><div className="person"><strong>{item.error ? "Revisar linha" : "Pronta para importar"}</strong><span>{item.error || Object.values(item.row).filter(Boolean).join(" · ")}</span></div></article>)}</div><button className="primary full" onClick={apply}><Upload size={17}/> Importar linhas corretas</button></Modal>}</section>;
+}
+
 function Registry({ kind, data, setData }) {
   const [open, setOpen] = useState(false),
     [editingId, setEditingId] = useState(null),
     [form, setForm] = useState({
       name: "",
       registration: "",
-      document: "",
       clientId: data.clients[0]?.id || "",
       unitId: data.units[0]?.id || "",
       sectorId: data.sectors[0]?.id || "",
@@ -860,7 +907,7 @@ function Registry({ kind, data, setData }) {
     people: "Colaboradores",
   }[kind];
   const blank = () => ({
-    name: "", registration: "", document: "", clientId: data.clients[0]?.id || "",
+    name: "", registration: "", clientId: data.clients[0]?.id || "",
     unitId: data.units[0]?.id || "", sectorId: data.sectors[0]?.id || "",
     locationId: data.locations[0]?.id || "", shift: shifts[0],
   });
@@ -884,7 +931,7 @@ function Registry({ kind, data, setData }) {
       item = {
         ...item,
         registration: form.registration,
-        document: form.document,
+        document: "",
         sectorId: form.sectorId,
         locationId: form.locationId,
         shift: form.shift,
@@ -910,9 +957,9 @@ function Registry({ kind, data, setData }) {
         <div className="participants">
           {data[kind].map((x) => (
             <article className="participant" key={x.id}>
-              <div className="avatar">{x.name[0]}</div>
+              <div className="avatar">{personLabel(x)[0]}</div>
               <div className="person">
-                <strong>{x.name}</strong>
+                <strong>{personLabel(x)}</strong>
                 <span>
                   {kind === "people"
                     ? `${x.registration} · ${nameOf(data.sectors, x.sectorId)} · ${x.shift}`
@@ -946,7 +993,6 @@ function Registry({ kind, data, setData }) {
             <label>
               Nome
               <input
-                required
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
               />
@@ -960,15 +1006,6 @@ function Registry({ kind, data, setData }) {
                     value={form.registration}
                     onChange={(e) =>
                       setForm({ ...form, registration: e.target.value })
-                    }
-                  />
-                </label>
-                <label>
-                  CPF
-                  <input
-                    value={form.document}
-                    onChange={(e) =>
-                      setForm({ ...form, document: e.target.value })
                     }
                   />
                 </label>
@@ -1217,9 +1254,9 @@ function UsersPanel({ users, setUsers, data, token, centralReady }) {
         <div className="participants">
           {users.map((x) => (
             <article className="participant" key={x.id}>
-              <div className="avatar">{x.name[0]}</div>
+              <div className="avatar">{personLabel(x)[0]}</div>
               <div className="person">
-                <strong>{x.name}</strong>
+                <strong>{personLabel(x)}</strong>
                 <span>
                   {roles[x.role]} · {x.email} ·{" "}
                   {userCompaniesLabel(x, data.clients)}
@@ -1311,7 +1348,6 @@ function Collect({
       sectorId: data.sectors[0]?.id || "",
       locationId: data.locations[0]?.id || "",
       shift: shifts[0],
-      time: "",
       roteiro: "Alongamento e mobilidade",
     }),
     [clientId, setClientId] = useState(availableClientIds[0] || data.clients[0]?.id || "");
@@ -1532,10 +1568,6 @@ function Collect({
               </select>
             </label>
             <label>
-              Horário da aula
-              <input type="time" value={classInfo.time} onChange={(e) => setClassInfo({ ...classInfo, time: e.target.value })} />
-            </label>
-            <label>
               Roteiro da aula
               <select value={classInfo.roteiro} onChange={(e) => setClassInfo({ ...classInfo, roteiro: e.target.value })}>
                 <option>Alongamento e mobilidade</option>
@@ -1639,9 +1671,9 @@ function Collect({
             <div className="participants">
               {classPeople.map((x) => (
                 <article className="participant" key={x.id}>
-                  <div className="avatar">{x.name[0]}</div>
+                  <div className="avatar">{personLabel(x)[0]}</div>
                   <div className="person">
-                    <strong>{x.name}</strong>
+                    <strong>{personLabel(x)}</strong>
                     <span>
                       {x.registration} · {nameOf(data.sectors, x.sectorId)} ·{" "}
                       {x.shift}
@@ -1719,7 +1751,6 @@ function Planning({ data, schedules, setSchedules }) {
     locationId: data.locations[0]?.id || "",
     shift: shifts[0],
     weekday: 1,
-    time: "09:00",
   });
   const clientSchedules = schedules.filter((item) => item.clientId === form.clientId);
   const planned = plannedClassesForMonth(clientSchedules, { clientId: form.clientId });
@@ -1739,10 +1770,10 @@ function Planning({ data, schedules, setSchedules }) {
         <label>Setor<select value={form.sectorId} onChange={(e) => setForm({ ...form, sectorId: e.target.value })}>{data.sectors.filter((item) => item.unitId === form.unitId).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
         <label>Local da aula<select value={form.locationId} onChange={(e) => setForm({ ...form, locationId: e.target.value })}>{data.locations.filter((item) => item.unitId === form.unitId).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
         <label>Turno<select value={form.shift} onChange={(e) => setForm({ ...form, shift: e.target.value })}>{shifts.map((item) => <option key={item}>{item}</option>)}</select></label>
-        <div className="planning-inline"><label>Dia útil da semana<select value={form.weekday} onChange={(e) => setForm({ ...form, weekday: Number(e.target.value) })}>{weekdays.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label>Horário<input type="time" value={form.time} onChange={(e) => setForm({ ...form, time: e.target.value })}/></label></div>
+        <div className="planning-inline"><label>Dia útil da semana<select value={form.weekday} onChange={(e) => setForm({ ...form, weekday: Number(e.target.value) })}>{weekdays.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label></div>
         <button className="primary full"><Plus size={17}/> Adicionar aula prevista</button>
       </form><p className="planning-help">Para duas ou mais aulas no mesmo dia, adicione uma linha para cada horário.</p></section>
-      <section className="card"><div className="card-heading"><h2>Grade programada</h2><p>{clientSchedules.length} recorrência(s) cadastrada(s).</p></div><div className="schedule-list">{clientSchedules.map((item) => <article key={item.id}><div><strong>{weekdays.find((day) => day.value === Number(item.weekday))?.label} · {item.time}</strong><span>{nameOf(data.units, item.unitId)} · {nameOf(data.sectors, item.sectorId)} · {item.shift}</span><small>{nameOf(data.locations, item.locationId)}</small></div><button className="danger-button" onClick={() => setSchedules((current) => current.filter((schedule) => schedule.id !== item.id))}><Trash2 size={17}/></button></article>)}</div></section>
+      <section className="card"><div className="card-heading"><h2>Grade programada</h2><p>{clientSchedules.length} dia(s) de aula cadastrado(s).</p></div><div className="schedule-list">{clientSchedules.map((item) => <article key={item.id}><div><strong>{weekdays.find((day) => day.value === Number(item.weekday))?.label}</strong><span>{nameOf(data.units, item.unitId)} · {nameOf(data.sectors, item.sectorId)} · {item.shift}</span><small>{nameOf(data.locations, item.locationId)}</small></div><button className="danger-button" onClick={() => setSchedules((current) => current.filter((schedule) => schedule.id !== item.id))}><Trash2 size={17}/></button></article>)}</div></section>
     </section>
   </section>;
 }
@@ -1904,6 +1935,7 @@ export default function App() {
           ["collect", ScanLine, "Coleta de aula"],
           ["planning", ClipboardCheck, "Aulas previstas"],
           ["registry", Building2, "Cadastros"],
+          ["import", FileSpreadsheet, "Importar Excel"],
           ["users", Users, "Usuários"],
           ["logs", ClipboardList, "Logs"],
           ["reports", FileText, "Relatórios"],
@@ -2017,6 +2049,9 @@ export default function App() {
             </div>
             <Registry kind={kind} data={data} setData={setData} />
           </>
+        )}{" "}
+        {page === "import" && (
+          <ExcelImport data={data} setData={setData} setUsers={setUsers} token={token} centralReady={centralReady} />
         )}{" "}
         {page === "users" && (
           <UsersPanel users={users} setUsers={setUsers} data={data} token={token} centralReady={centralReady} />

@@ -7,6 +7,7 @@ const muted = [138, 122, 120];
 const line = [234, 221, 224];
 const rate = (value, total) => (total ? `${Math.round((value / total) * 100)}%` : '0%');
 const nameOf = (list, id) => list.find((item) => item.id === id)?.name || '—';
+const personName = (person) => person.name?.trim() || `Colaborador ${person.registration || 'sem identificação'}`;
 const statusLabel = { present: 'Presente', absent: 'Ausente', missing: 'Faltante' };
 
 export function generateDashboardReport({ data, people, classes, attendance, filter, planned }) {
@@ -24,7 +25,6 @@ export function generateDashboardReport({ data, people, classes, attendance, fil
     filter.unitId && nameOf(data.units, filter.unitId),
     filter.sectorId && nameOf(data.sectors, filter.sectorId),
     filter.shift,
-    filter.time,
     filter.locationId && nameOf(data.locations, filter.locationId),
   ].filter(Boolean).join(' · ') || 'Visão geral';
   const sectorRows = Object.values(people.reduce((rows, person) => {
@@ -127,12 +127,13 @@ export function generateDashboardReport({ data, people, classes, attendance, fil
     const registration = attendance[person.id];
     if (index % 2 === 0) { pdf.setFillColor(...tint); pdf.rect(left, y, right - left, 8, 'F'); }
     pdf.setTextColor(...deep); pdf.setFont('helvetica', 'normal'); pdf.setFontSize(7.6);
-    pdf.text(pdf.splitTextToSize(person.name, 48), 20, y + 5.1);
+    pdf.text(pdf.splitTextToSize(personName(person), 48), 20, y + 5.1);
     pdf.setTextColor(...muted); pdf.setFontSize(6.7); pdf.text(person.registration || person.document || '—', 20, y + 7.4);
     pdf.setTextColor(...deep); pdf.setFontSize(7.2);
     pdf.text(pdf.splitTextToSize(`${nameOf(data.clients, person.clientId)} · ${nameOf(data.sectors, person.sectorId)}`, 58), 74, y + 5.1);
     pdf.text(person.shift || '—', 136, y + 5.1);
-    pdf.setTextColor(registration?.status === 'present' ? [46, 125, 91] : registration?.status === 'absent' ? [201, 130, 43] : wine);
+    const statusColor = registration?.status === 'present' ? [46, 125, 91] : registration?.status === 'absent' ? [201, 130, 43] : wine;
+    pdf.setTextColor(...statusColor);
     pdf.setFont('helvetica', 'bold'); pdf.text(statusLabel[registration?.status] || 'Faltante', 166, y + 5.1);
     y += 8;
   });
