@@ -678,6 +678,7 @@ function Dashboard({ data, schedules, classes, attendance, user }) {
         return out;
       }, {}),
     );
+  const companyGroups = groups("clientId", people, (id) => nameOf(data.clients, id)).sort((a, b) => b.present / Math.max(b.total, 1) - a.present / Math.max(a.total, 1));
   const Group = ({ field, label, title }) => (
     <section className="card report-card">
       <div className="card-heading">
@@ -734,6 +735,17 @@ function Dashboard({ data, schedules, classes, attendance, user }) {
         locations={data.locations}
         scopeIds={permittedClientIds}
       />
+      <section className="card" style={{ padding: 24, marginBottom: 18, display: "grid", gridTemplateColumns: "minmax(170px,.8fr) 1.2fr", gap: 24, alignItems: "center" }}>
+        <div style={{ textAlign: "center", padding: 14, borderRadius: 14, background: "var(--tint)" }}>
+          <p className="eyebrow">ADESÃO GERAL</p>
+          <strong style={{ fontFamily: '"Montserrat Alternates", sans-serif', fontSize: 44, color: "var(--wine)" }}>{rate(done.length, people.length)}</strong>
+          <p className="muted" style={{ margin: "6px 0 0" }}>{done.length} de {people.length} participantes</p>
+        </div>
+        <div>
+          <div className="card-heading" style={{ padding: "0 0 12px" }}><h2>Visão executiva do período</h2><p>Leitura rápida da adesão e execução das aulas previstas.</p></div>
+          <div className="report-rows">{companyGroups.map((group) => <div className="report-row" key={group.key}><strong>{group.label}</strong><span>{group.present} presentes de {group.total}</span><div className="bar"><i style={{ width: `${group.total ? (group.present / group.total) * 100 : 0}%` }} /></div><b>{rate(group.present, group.total)}</b></div>)}</div>
+        </div>
+      </section>
       <div className="metrics">
         <article>
           <span>Participantes</span>
