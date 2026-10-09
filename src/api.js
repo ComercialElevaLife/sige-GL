@@ -27,28 +27,29 @@ export const centralSync = (token, state) => request("/sync", {
   body: JSON.stringify({ state, session: token }),
 });
 
-export const centralUsers = (token) => request("/users", { token });
+export const centralUsers = (token) => request("/users/list", {
+  method: "POST",
+  body: JSON.stringify({ session: token }),
+});
 
 export const centralCreateUser = (token, user) => request("/users", {
   method: "POST",
-  token,
-  body: JSON.stringify(user),
+  body: JSON.stringify({ ...user, session: token }),
 });
 
 export const centralUpdateUser = (token, id, user) => request(`/users/${id}`, {
   method: "PATCH",
-  token,
-  body: JSON.stringify(user),
+  body: JSON.stringify({ ...user, session: token }),
 });
 
 export const centralDeleteUser = (token, id) => request(`/users/${id}`, {
   method: "DELETE",
-  token,
+  body: JSON.stringify({ session: token }),
 });
 
 export const centralReinviteUser = (token, id) => request(`/users/${id}`, {
   method: "POST",
-  token,
+  body: JSON.stringify({ session: token }),
 });
 
 export const centralActivate = (invite, password) => request("/auth/activate", {

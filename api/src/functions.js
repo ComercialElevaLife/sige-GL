@@ -310,18 +310,14 @@ app.http("resetPassword", {
 });
 
 app.http("users", {
-  methods: ["GET", "POST"],
+  methods: ["POST"],
   authLevel: "anonymous",
   route: "users",
   handler: async (request) => {
     try {
-      await requireAdmin(request);
+      const { name, email, role, clientIds, session } = await request.json();
+      await requireAdmin(request, session);
       await userStore();
-      if (request.method === "GET") {
-        const result = await query("select id, name, email, role, client_ids, active, created_at from app_user order by name");
-        return json({ users: result.rows.map(publicUser) });
-      }
-      const { name, email, role, clientIds } = await request.json();
       if (!name?.trim() || !email?.trim() || !["admin", "professor", "client"].includes(role)) {
         return json({ error: "Nome, e-mail e perfil válido são obrigatórios." }, 400);
       }
@@ -349,13 +345,31 @@ app.http("users", {
   },
 });
 
+app.http("usersList", {
+  methods: ["POST"],
+  authLevel: "anonymous",
+  route: "users/list",
+  handler: async (request) => {
+    try {
+      const { session } = await request.json();
+      await requireAdmin(request, session);
+      await userStore();
+      const result = await query("select id, name, email, role, client_ids, active, created_at from app_user order by name");
+      return json({ users: result.rows.map(publicUser) });
+    } catch (error) {
+      return configurationError(error);
+    }
+  },
+});
+
 app.http("userById", {
   methods: ["PATCH", "DELETE", "POST"],
   authLevel: "anonymous",
   route: "users/{id}",
   handler: async (request) => {
     try {
-      const actor = await requireAdmin(request);
+      const payload = await request.json().catch(() => ({}));
+      const actor = await requireAdmin(request, payload.session);
       await userStore();
       const id = request.params.get("id");
       if (request.method === "DELETE") {
@@ -383,7 +397,7 @@ app.http("userById", {
         });
         return json({ invitationUrl: delivery.sent ? undefined : invitationUrl, delivery });
       }
-      const { name, email, role, clientIds, active } = await request.json();
+      const { name, email, role, clientIds, active } = payload;
       if (!name?.trim() || !email?.trim() || !["admin", "professor", "client"].includes(role)) {
         return json({ error: "Nome, e-mail e perfil válido são obrigatórios." }, 400);
       }
