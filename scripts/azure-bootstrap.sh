@@ -31,6 +31,7 @@ if [[ ! "$DB_PASSWORD" =~ ^[A-Za-z0-9!@#%_-]{16,}$ ]]; then
   echo "Formato de senha inválido. Encerrando sem alterar o banco."
   exit 1
 fi
+export DB_PASSWORD
 
 echo "Atualizando a senha do banco..."
 az postgres flexible-server update --resource-group "$RESOURCE_GROUP" --name "$POSTGRES_SERVER" --admin-password "$DB_PASSWORD" --output none
