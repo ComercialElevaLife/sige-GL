@@ -47,6 +47,7 @@ const K = {
   units: "gl-units",
   sectors: "gl-sectors",
   locations: "gl-locations",
+  workShifts: "gl-work-shifts",
   schedules: "gl-schedules",
   people: "gl-people",
   classes: "gl-classes",
@@ -62,6 +63,7 @@ const roles = {
   client: "Cliente",
 };
 const shifts = ["Administrativo", "1º turno", "2º turno", "3º turno"];
+const scaleOptions = ["Sem escala definida", "5x2", "5x3", "6x1", "12x36", "Escala de letras", "Outra"];
 const cancelReasons = {
   client: [
     "Ausência de pessoal no setor",
@@ -83,6 +85,12 @@ const seed = {
     { id: "L-1", unitId: "U-1", name: "Sala de treinamento" },
     { id: "L-2", unitId: "U-1", name: "Área de produção" },
     { id: "L-3", unitId: "U-1", name: "Área de expedição" },
+  ],
+  workShifts: [
+    { id: "T-1", clientId: "C-1", name: "Administrativo", start: "08:00", end: "17:00", scale: "5x2" },
+    { id: "T-2", clientId: "C-1", name: "1º turno", start: "06:00", end: "14:00", scale: "6x1" },
+    { id: "T-3", clientId: "C-1", name: "2º turno", start: "14:00", end: "22:00", scale: "6x1" },
+    { id: "T-4", clientId: "C-1", name: "3º turno", start: "22:00", end: "06:00", scale: "6x1" },
   ],
   people: [
     ["P-1", "Ana Clara Souza", "M-1001", "S-1", "L-1", "Administrativo"],
@@ -159,12 +167,14 @@ function demoScenario() {
       weekdays: [1, 2, 4, 5], times: ["09:30", "12:30", "16:30", "18:00"],
     },
   ];
-  const result = { clients: [], units: [], sectors: [], locations: [], people: [], schedules: [], classes: [], attendance: {}, audit: [] };
+  const result = { clients: [], units: [], sectors: [], locations: [], workShifts: [], people: [], schedules: [], classes: [], attendance: {}, audit: [] };
   companies.forEach((company, companyIndex) => {
     const unitId = `U-DEMO-${companyIndex + 1}`;
     const sectorIds = [`S-DEMO-${companyIndex + 1}-1`, `S-DEMO-${companyIndex + 1}-2`];
     const locationIds = [`L-DEMO-${companyIndex + 1}-1`, `L-DEMO-${companyIndex + 1}-2`];
     result.clients.push({ id: company.id, name: company.name });
+    result.workShifts.push({ id: `T-DEMO-${companyIndex + 1}-1`, clientId: company.id, name: "Administrativo", start: "08:00", end: "17:00", scale: "5x2" });
+    result.workShifts.push({ id: `T-DEMO-${companyIndex + 1}-2`, clientId: company.id, name: "Operacional", start: "06:00", end: "14:00", scale: "6x1" });
     result.units.push({ id: unitId, clientId: company.id, name: company.unit });
     company.sectorNames.forEach((name, index) => result.sectors.push({ id: sectorIds[index], unitId, name }));
     company.locationNames.forEach((name, index) => result.locations.push({ id: locationIds[index], unitId, name }));
@@ -750,6 +760,16 @@ function Dashboard({ data, schedules, classes, attendance, user }) {
       </div>
       <div className="report-grid">
         <Group
+          title="Adesão geral por empresa"
+          field="clientId"
+          label={(id) => nameOf(data.clients, id)}
+        />
+        <Group
+          title="Adesão por unidade"
+          field="unitId"
+          label={(id) => nameOf(data.units, id)}
+        />
+        <Group
           title="Adesão por setor"
           field="sectorId"
           label={(id) => nameOf(data.sectors, id)}
@@ -885,6 +905,14 @@ function ExcelImport({ data, setData, setUsers, token, centralReady }) {
     setMessage(`${valid.length} registro(s) importado(s) com sucesso.`); setPreview(null);
   };
   return <section className="directory"><section className="heading"><div><p className="eyebrow">IMPORTAÇÃO ASSISTIDA</p><h1>Importar planilha</h1><p>Baixe o modelo, preencha e confira todos os dados antes de gravar.</p></div></section><section className="card" style={{ padding: 22 }}><div className="form"><label>O que deseja importar?<select value={type} onChange={(e) => { setType(e.target.value); setPreview(null); }}>{Object.entries(models).map(([key, model]) => <option key={key} value={key}>{model.label}</option>)}</select></label><button className="secondary" onClick={template}><Download size={17}/> Baixar modelo</button><label>Escolha a planilha preenchida<input type="file" accept=".xlsx,.xls,.csv" onChange={analyze}/></label></div>{message && <p className="notice">{message}</p>}</section>{preview && <Modal title="Conferir importação" onClose={() => setPreview(null)}><p className="muted">Arquivo: {preview.file}. Linhas verdes serão importadas; linhas com aviso ficam de fora.</p><div className="participants">{preview.rows.map((item) => <article className="participant" key={item.index}><div className="avatar">{item.index}</div><div className="person"><strong>{item.error ? "Revisar linha" : "Pronta para importar"}</strong><span>{item.error || Object.values(item.row).filter(Boolean).join(" · ")}</span></div></article>)}</div><button className="primary full" onClick={apply}><Upload size={17}/> Importar linhas corretas</button></Modal>}</section>;
+}
+
+function ShiftSettings({ data, setData }) {
+  const [clientId, setClientId] = useState(data.clients[0]?.id || "");
+  const [form, setForm] = useState({ name: "Administrativo", start: "08:00", end: "17:00", scale: "5x2" });
+  const items = data.workShifts.filter((item) => item.clientId === clientId);
+  const save = (event) => { event.preventDefault(); if (!form.name.trim()) return; setData((current) => ({ ...current, workShifts: [...current.workShifts, { id: newid("TUR"), clientId, ...form, name: form.name.trim() }] })); };
+  return <section className="directory"><section className="heading"><div><p className="eyebrow">JORNADAS E ESCALAS</p><h1>Turnos e horários</h1><p>Cadastre os turnos reais de cada cliente. Você pode criar quantos forem necessários.</p></div></section><section className="planning-grid"><section className="card planning-form"><h2>Novo turno</h2><form className="form" onSubmit={save}><label>Cliente / empresa<select value={clientId} onChange={(e) => setClientId(e.target.value)}>{data.clients.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Nome do turno<input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Ex.: Administrativo, A, 1º turno" /></label><div className="planning-inline"><label>Início<input type="time" value={form.start} onChange={(e) => setForm({ ...form, start: e.target.value })} /></label><label>Fim<input type="time" value={form.end} onChange={(e) => setForm({ ...form, end: e.target.value })} /></label></div><label>Escala<select value={form.scale} onChange={(e) => setForm({ ...form, scale: e.target.value })}>{scaleOptions.map((item) => <option key={item}>{item}</option>)}</select></label><button className="primary full"><Plus size={17}/> Adicionar turno</button></form></section><section className="card"><div className="card-heading"><h2>Turnos cadastrados</h2><p>Use esta lista para a coleta e o planejamento de aulas.</p></div><div className="schedule-list">{items.map((item) => <article key={item.id}><div><strong>{item.name} · {item.start}–{item.end}</strong><span>Escala: {item.scale}</span></div><button className="danger-button" onClick={() => setData((current) => ({ ...current, workShifts: current.workShifts.filter((shift) => shift.id !== item.id) }))}><Trash2 size={17}/></button></article>)}{!items.length && <p className="empty">Nenhum turno cadastrado para este cliente.</p>}</div></section></section></section>;
 }
 
 function Registry({ kind, data, setData }) {
@@ -1352,6 +1380,8 @@ function Collect({
     }),
     [clientId, setClientId] = useState(availableClientIds[0] || data.clients[0]?.id || "");
   const unitId = data.units.find((x) => x.clientId === clientId)?.id;
+  const clientShiftNames = data.workShifts.filter((item) => item.clientId === clientId).map((item) => item.name);
+  const availableShiftNames = clientShiftNames.length ? clientShiftNames : shifts;
   useEffect(() => {
     const unit = data.units.find((x) => x.clientId === clientId);
     const sector = data.sectors.find((x) => x.unitId === unit?.id);
@@ -1360,6 +1390,7 @@ function Collect({
       ...current,
       sectorId: sector?.id || "",
       locationId: classLocation?.id || "",
+      shift: clientShiftNames[0] || shifts[0],
     }));
   }, [clientId]);
   const scoped = data.people.filter(
@@ -1558,7 +1589,7 @@ function Collect({
             <label>
               Turno
               <select value={classInfo.shift} onChange={(e) => setClassInfo({ ...classInfo, shift: e.target.value })}>
-                {shifts.map((item) => <option key={item}>{item}</option>)}
+                {availableShiftNames.map((item) => <option key={item}>{item}</option>)}
               </select>
             </label>
             <label>
@@ -1753,6 +1784,7 @@ function Planning({ data, schedules, setSchedules }) {
     weekday: 1,
   });
   const clientSchedules = schedules.filter((item) => item.clientId === form.clientId);
+  const availableShiftNames = data.workShifts.filter((item) => item.clientId === form.clientId).map((item) => item.name);
   const planned = plannedClassesForMonth(clientSchedules, { clientId: form.clientId });
   const save = (event) => {
     event.preventDefault();
@@ -1765,11 +1797,11 @@ function Planning({ data, schedules, setSchedules }) {
     </section>
     <section className="planning-grid">
       <section className="card planning-form"><h2>Programar aula recorrente</h2><form className="form" onSubmit={save}>
-        <label>Cliente / empresa<select value={form.clientId} onChange={(e) => setForm({ ...form, clientId: e.target.value, unitId: "", sectorId: "", locationId: "" })}>{data.clients.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+        <label>Cliente / empresa<select value={form.clientId} onChange={(e) => { const clientId = e.target.value; const firstShift = data.workShifts.find((item) => item.clientId === clientId)?.name || shifts[0]; setForm({ ...form, clientId, unitId: "", sectorId: "", locationId: "", shift: firstShift }); }}>{data.clients.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
         <label>Unidade<select value={form.unitId} onChange={(e) => setForm({ ...form, unitId: e.target.value, sectorId: "", locationId: "" })}>{data.units.filter((item) => item.clientId === form.clientId).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
         <label>Setor<select value={form.sectorId} onChange={(e) => setForm({ ...form, sectorId: e.target.value })}>{data.sectors.filter((item) => item.unitId === form.unitId).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
         <label>Local da aula<select value={form.locationId} onChange={(e) => setForm({ ...form, locationId: e.target.value })}>{data.locations.filter((item) => item.unitId === form.unitId).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-        <label>Turno<select value={form.shift} onChange={(e) => setForm({ ...form, shift: e.target.value })}>{shifts.map((item) => <option key={item}>{item}</option>)}</select></label>
+        <label>Turno<select value={form.shift} onChange={(e) => setForm({ ...form, shift: e.target.value })}>{(availableShiftNames.length ? availableShiftNames : shifts).map((item) => <option key={item}>{item}</option>)}</select></label>
         <div className="planning-inline"><label>Dia útil da semana<select value={form.weekday} onChange={(e) => setForm({ ...form, weekday: Number(e.target.value) })}>{weekdays.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label></div>
         <button className="primary full"><Plus size={17}/> Adicionar aula prevista</button>
       </form><p className="planning-help">Para duas ou mais aulas no mesmo dia, adicione uma linha para cada horário.</p></section>
@@ -1784,6 +1816,7 @@ export default function App() {
     units: read(K.units, seed.units),
     sectors: read(K.sectors, seed.sectors),
     locations: read(K.locations, seed.locations),
+    workShifts: read(K.workShifts, seed.workShifts),
     people: read(K.people, seed.people),
   }));
   const [users, setUsers] = useState(() => read(K.users, seed.users).map(normalizeUser)),
@@ -1809,6 +1842,7 @@ export default function App() {
       units: remote.data.units || [],
       sectors: remote.data.sectors || [],
       locations: remote.data.locations || [],
+      workShifts: remote.data.workShifts || [],
       people: remote.data.people || [],
     });
     setSchedules(remote.schedules || remote.data.schedules || []);
@@ -1837,6 +1871,7 @@ export default function App() {
       units: appendMissing(current.units, demo.units),
       sectors: appendMissing(current.sectors, demo.sectors),
       locations: appendMissing(current.locations, demo.locations),
+      workShifts: appendMissing(current.workShifts, demo.workShifts),
       people: appendMissing(current.people, demo.people),
     }));
     setSchedules((current) => appendMissing(current, demo.schedules));
@@ -2036,6 +2071,7 @@ export default function App() {
                 ["units", "Unidades"],
                 ["sectors", "Setores"],
                 ["locations", "Locais de aula"],
+                ["workShifts", "Turnos e horários"],
                 ["people", "Colaboradores"],
               ].map(([v, l]) => (
                 <button
@@ -2047,7 +2083,7 @@ export default function App() {
                 </button>
               ))}
             </div>
-            <Registry kind={kind} data={data} setData={setData} />
+            {kind === "workShifts" ? <ShiftSettings data={data} setData={setData} /> : <Registry kind={kind} data={data} setData={setData} />}
           </>
         )}{" "}
         {page === "import" && (
