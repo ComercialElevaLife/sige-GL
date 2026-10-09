@@ -243,6 +243,7 @@ const write = (key, value) => localStorage.setItem(key, JSON.stringify(value));
 const newid = (p) => `${p}-${crypto.randomUUID().slice(0, 8)}`;
 const nameOf = (list, id) => list.find((x) => x.id === id)?.name || "—";
 const personLabel = (person) => person.name?.trim() || `Colaborador ${person.registration || "sem identificação"}`;
+const participantQr = (person) => `SIGEGL:${person.clientId}:${person.registration}`;
 const rate = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : "0%");
 const clientIdsFor = (user) => {
   if (user.role === "admin") return [];
@@ -927,6 +928,7 @@ function ShiftSettings({ data, setData }) {
 function Registry({ kind, data, setData }) {
   const [open, setOpen] = useState(false),
     [editingId, setEditingId] = useState(null),
+    [qrPerson, setQrPerson] = useState(null),
     [form, setForm] = useState({
       name: "",
       registration: "",
@@ -1011,6 +1013,7 @@ function Registry({ kind, data, setData }) {
               <button className="row-edit" onClick={() => openEdit(x)} aria-label={`Editar ${x.name}`}>
                 <Pencil size={16} />
               </button>
+              {kind === "people" && <button className="row-edit" onClick={() => setQrPerson(x)} aria-label={`Ver QR Code de ${personLabel(x)}`}><QrCode size={16} /></button>}
               <button
                 className="danger-button"
                 onClick={() =>
@@ -1154,6 +1157,7 @@ function Registry({ kind, data, setData }) {
           </form>
         </Modal>
       )}
+      {qrPerson && <Modal title="QR Code do colaborador" onClose={() => setQrPerson(null)}><section className="qr-modal"><QRCodeSVG value={participantQr(qrPerson)} size={230} includeMargin /><h3>{personLabel(qrPerson)}</h3><p>Matrícula/CPF: {qrPerson.registration}</p><p className="muted">Este QR Code é único e registra a presença deste colaborador.</p><button className="primary full" onClick={() => window.print()}><FileText size={17}/> Imprimir etiqueta</button></section></Modal>}
     </section>
   );
 }
@@ -1394,6 +1398,7 @@ function Collect({
     [location, setLocation] = useState(null),
     [representativeRegistration, setRepresentativeRegistration] = useState(""),
     [representativeConfirmed, setRepresentativeConfirmed] = useState(false),
+    [representativeScanner, setRepresentativeScanner] = useState(false),
     [classInfo, setClassInfo] = useState({
       sectorId: data.sectors[0]?.id || "",
       locationId: data.locations[0]?.id || "",
@@ -1494,7 +1499,7 @@ function Collect({
   const read = (value) => {
     setScanner(false);
     const person = classPeople.find(
-      (x) => x.id === (value.startsWith("SIGEGL:") ? value.slice(7) : value),
+      (x) => value === participantQr(x) || x.id === (value.startsWith("SIGEGL:") ? value.slice(7) : value),
     );
     if (!person) {
       const attempts = scanFailures + 1;
@@ -1695,6 +1700,7 @@ function Collect({
                   <ClipboardList size={18} /> Lançamento manual
                 </button>
               </div>
+              <button className="primary full" onClick={() => setStage("signature")}>Encerrar e validar aula</button>
             </section>
           ) : (
             <section className="actions">
@@ -1755,6 +1761,7 @@ function Collect({
             Matrícula do representante
             <input autoFocus value={representativeRegistration} onChange={(event) => setRepresentativeRegistration(event.target.value)} placeholder="Digite a matrícula" />
           </label>
+          <button className="secondary" onClick={() => setRepresentativeScanner(true)}><ScanLine size={17}/> Ler QR Code do responsável</button>
           <label className="confirmation-check">
             <input type="checkbox" checked={representativeConfirmed} onChange={(event) => setRepresentativeConfirmed(event.target.checked)} />
             Confirmo que a aula foi realizada neste local.
@@ -1775,6 +1782,7 @@ function Collect({
         </section>
       )}
       {scanner && <Scanner onRead={read} onClose={() => { setScanner(false); if (entryMode === "qr" && scanFailures >= 2) setEntryMode("manual"); }} onIssue={reportScannerIssue} onManual={() => { setScanner(false); setEntryMode("manual"); }} />}{" "}
+      {representativeScanner && <Scanner onRead={(value) => { setRepresentativeScanner(false); setRepresentativeRegistration(value.replace(/^SIGEGL:(RESP:)?/i, "")); setRepresentativeConfirmed(true); setNotice("Responsável validado por QR Code."); }} onClose={() => setRepresentativeScanner(false)} onManual={() => setRepresentativeScanner(false)} />}
       {face && (
         <Face
           person={face}
