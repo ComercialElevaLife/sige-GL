@@ -499,6 +499,7 @@ function Filters({
   units,
   sectors,
   locations,
+  times = [],
   scopeIds = [],
 }) {
   const isRestricted = scopeIds.length > 0;
@@ -513,6 +514,7 @@ function Filters({
             clientId: e.target.value,
             unitId: "",
             sectorId: "",
+            time: "",
             locationId: "",
           })
         }
@@ -533,6 +535,7 @@ function Filters({
             ...value,
             unitId: e.target.value,
             sectorId: "",
+            time: "",
             locationId: "",
           })
         }
@@ -573,6 +576,13 @@ function Filters({
         ))}
       </select>
       <select
+        value={value.time}
+        onChange={(e) => setValue({ ...value, time: e.target.value })}
+      >
+        <option value="">Todos os horários</option>
+        {times.map((time) => <option key={time} value={time}>{time}</option>)}
+      </select>
+      <select
         value={value.locationId}
         onChange={(e) => setValue({ ...value, locationId: e.target.value })}
       >
@@ -596,9 +606,13 @@ function Dashboard({ data, schedules, classes, attendance, user }) {
       unitId: "",
       sectorId: "",
       shift: "",
+      time: "",
       locationId: "",
     }),
     [detail, setDetail] = useState(null);
+  const times = [...new Set(schedules
+    .filter((item) => (!filter.clientId || item.clientId === filter.clientId) && (!filter.unitId || item.unitId === filter.unitId))
+    .map((item) => item.time).filter(Boolean))].sort();
   const people = data.people.filter(
     (x) =>
       (user.role === "admin" || permittedClientIds.includes(x.clientId)) &&
@@ -606,7 +620,8 @@ function Dashboard({ data, schedules, classes, attendance, user }) {
       (!filter.unitId || x.unitId === filter.unitId) &&
       (!filter.sectorId || x.sectorId === filter.sectorId) &&
       (!filter.shift || x.shift === filter.shift) &&
-      (!filter.locationId || x.locationId === filter.locationId),
+      (!filter.locationId || x.locationId === filter.locationId) &&
+      (!filter.time || schedules.some((schedule) => schedule.time === filter.time && schedule.clientId === x.clientId && schedule.unitId === x.unitId && schedule.sectorId === x.sectorId && schedule.locationId === x.locationId && schedule.shift === x.shift)),
   );
   const done = people.filter((x) => attendance[x.id]?.status === "present"),
     missing = people.filter((x) => attendance[x.id]?.status !== "present");
@@ -617,7 +632,8 @@ function Dashboard({ data, schedules, classes, attendance, user }) {
       (!filter.unitId || x.unitId === filter.unitId) &&
       (!filter.sectorId || x.sectorId === filter.sectorId) &&
       (!filter.shift || x.shift === filter.shift) &&
-      (!filter.locationId || x.locationId === filter.locationId),
+      (!filter.locationId || x.locationId === filter.locationId) &&
+      (!filter.time || x.time === filter.time),
   );
   const applied = related.filter((x) => x.status === "applied").length,
     cancelled = related.filter((x) => x.status === "cancelled").length;
@@ -703,6 +719,7 @@ function Dashboard({ data, schedules, classes, attendance, user }) {
         units={data.units}
         sectors={data.sectors}
         locations={data.locations}
+        times={times}
         scopeIds={permittedClientIds}
       />
       <div className="metrics">
@@ -824,6 +841,7 @@ function Dashboard({ data, schedules, classes, attendance, user }) {
 
 function Registry({ kind, data, setData }) {
   const [open, setOpen] = useState(false),
+    [editingId, setEditingId] = useState(null),
     [form, setForm] = useState({
       name: "",
       registration: "",
@@ -841,9 +859,24 @@ function Registry({ kind, data, setData }) {
     locations: "Locais de aula",
     people: "Colaboradores",
   }[kind];
+  const blank = () => ({
+    name: "", registration: "", document: "", clientId: data.clients[0]?.id || "",
+    unitId: data.units[0]?.id || "", sectorId: data.sectors[0]?.id || "",
+    locationId: data.locations[0]?.id || "", shift: shifts[0],
+  });
+  const openCreate = () => {
+    setEditingId(null);
+    setForm(blank());
+    setOpen(true);
+  };
+  const openEdit = (item) => {
+    setEditingId(item.id);
+    setForm({ ...blank(), ...item });
+    setOpen(true);
+  };
   const create = (e) => {
     e.preventDefault();
-    let item = { id: newid(kind.slice(0, 2).toUpperCase()), name: form.name };
+    let item = { id: editingId || newid(kind.slice(0, 2).toUpperCase()), name: form.name };
     if (kind === "units" || kind === "people") item.clientId = form.clientId;
     if (kind === "sectors" || kind === "locations" || kind === "people")
       item.unitId = form.unitId;
@@ -856,7 +889,9 @@ function Registry({ kind, data, setData }) {
         locationId: form.locationId,
         shift: form.shift,
       };
-    setData((d) => ({ ...d, [kind]: [...d[kind], item] }));
+    setData((d) => ({ ...d, [kind]: editingId
+      ? d[kind].map((current) => current.id === editingId ? item : current)
+      : [...d[kind], item] }));
     setOpen(false);
   };
   return (
@@ -867,7 +902,7 @@ function Registry({ kind, data, setData }) {
           <h1>{title}</h1>
           <p>Cadastre e mantenha a estrutura da operação.</p>
         </div>
-        <button className="primary" onClick={() => setOpen(true)}>
+        <button className="primary" onClick={openCreate}>
           <Plus size={17} /> Adicionar
         </button>
       </section>
@@ -884,6 +919,9 @@ function Registry({ kind, data, setData }) {
                     : x.id}
                 </span>
               </div>
+              <button className="row-edit" onClick={() => openEdit(x)} aria-label={`Editar ${x.name}`}>
+                <Pencil size={16} />
+              </button>
               <button
                 className="danger-button"
                 onClick={() =>
@@ -901,7 +939,7 @@ function Registry({ kind, data, setData }) {
       </section>
       {open && (
         <Modal
-          title={`Cadastrar ${title.slice(0, -1).toLowerCase()}`}
+          title={editingId ? `Editar ${title.slice(0, -1).toLowerCase()}` : `Cadastrar ${title.slice(0, -1).toLowerCase()}`}
           onClose={() => setOpen(false)}
         >
           <form className="form" onSubmit={create}>
@@ -1025,7 +1063,7 @@ function Registry({ kind, data, setData }) {
                 </label>
               </>
             )}
-            <button className="primary full">Salvar</button>
+            <button className="primary full">{editingId ? "Salvar alterações" : "Salvar"}</button>
           </form>
         </Modal>
       )}
@@ -1272,6 +1310,7 @@ function Collect({
       sectorId: data.sectors[0]?.id || "",
       locationId: data.locations[0]?.id || "",
       shift: shifts[0],
+      time: "",
       roteiro: "Alongamento e mobilidade",
     }),
     [clientId, setClientId] = useState(availableClientIds[0] || data.clients[0]?.id || "");
@@ -1484,6 +1523,10 @@ function Collect({
               <select value={classInfo.locationId} onChange={(e) => setClassInfo({ ...classInfo, locationId: e.target.value })}>
                 {data.locations.filter((item) => item.unitId === unitId).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
               </select>
+            </label>
+            <label>
+              Horário da aula
+              <input type="time" value={classInfo.time} onChange={(e) => setClassInfo({ ...classInfo, time: e.target.value })} />
             </label>
             <label>
               Roteiro da aula
