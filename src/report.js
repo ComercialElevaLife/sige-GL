@@ -24,6 +24,7 @@ export function generateDashboardReport({ data, people, classes, attendance, fil
     filter.unitId && nameOf(data.units, filter.unitId),
     filter.sectorId && nameOf(data.sectors, filter.sectorId),
     filter.shift,
+    filter.time,
     filter.locationId && nameOf(data.locations, filter.locationId),
   ].filter(Boolean).join(' · ') || 'Visão geral';
   const sectorRows = Object.values(people.reduce((rows, person) => {
