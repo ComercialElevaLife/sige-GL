@@ -22,7 +22,7 @@ need openssl
 
 echo "SIGE GL · configuração central Azure"
 echo "Os valores de senha não serão exibidos."
-echo "Para compatibilidade com o Azure CLI, use 16+ caracteres sem espaço, +, aspas ou barra invertida."
+echo "Use 16+ caracteres com maiúscula, minúscula, número e símbolo; sem espaços."
 echo "Inclua maiúscula, minúscula, número e um destes símbolos: ! @ # % _ -"
 
 read -r -s -p "Defina uma NOVA senha forte para o banco PostgreSQL: " DB_PASSWORD
@@ -33,23 +33,23 @@ if [[ ! "$DB_PASSWORD" =~ ^[A-Za-z0-9!@#%_-]{16,}$ ]]; then
 fi
 
 echo "Atualizando a senha do banco..."
-az postgres flexible-server update +  --resource-group "$RESOURCE_GROUP" +  --name "$POSTGRES_SERVER" +  --admin-password "$DB_PASSWORD" +  --output none
+az postgres flexible-server update --resource-group "$RESOURCE_GROUP" --name "$POSTGRES_SERVER" --admin-password "$DB_PASSWORD" --output none
 
 echo "Liberando extensão necessária e validando conexão..."
-az postgres flexible-server parameter set +  --resource-group "$RESOURCE_GROUP" +  --server-name "$POSTGRES_SERVER" +  --name azure.extensions +  --value PGCRYPTO +  --output none
+az postgres flexible-server parameter set --resource-group "$RESOURCE_GROUP" --server-name "$POSTGRES_SERVER" --name azure.extensions --value PGCRYPTO --output none
 
 export PGPASSWORD="$DB_PASSWORD"
 CONNECTION="host=$POSTGRES_HOST port=5432 dbname=postgres user=$POSTGRES_USER sslmode=require"
 psql "$CONNECTION" -v ON_ERROR_STOP=1 -c "select 'Conexão PostgreSQL validada' as status;"
 
 echo "Aplicando o esquema de dados..."
-curl -fsSL "https://raw.githubusercontent.com/ComercialElevaLife/sige-GL/main/api/schema.sql" +  | psql "$CONNECTION" -v ON_ERROR_STOP=1
+curl -fsSL "https://raw.githubusercontent.com/ComercialElevaLife/sige-GL/main/api/schema.sql" | psql "$CONNECTION" -v ON_ERROR_STOP=1
 
 DB_PASSWORD_ENCODED="$(python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["DB_PASSWORD"], safe=""))')"
 JWT_SECRET="$(openssl rand -hex 48)"
 
 echo "Configurando a API Azure..."
-az staticwebapp appsettings set +  --name "$STATIC_APP" +  --resource-group "$RESOURCE_GROUP" +  --setting-names +    "POSTGRES_CONNECTION_STRING=postgresql://$POSTGRES_USER:$DB_PASSWORD_ENCODED@$POSTGRES_HOST:5432/postgres?sslmode=require" +    "AUTH_JWT_SECRET=$JWT_SECRET" +    "POSTGRES_SSL=true" +  --output none
+az staticwebapp appsettings set --name "$STATIC_APP" --resource-group "$RESOURCE_GROUP" --setting-names "POSTGRES_CONNECTION_STRING=postgresql://$POSTGRES_USER:$DB_PASSWORD_ENCODED@$POSTGRES_HOST:5432/postgres?sslmode=require" "AUTH_JWT_SECRET=$JWT_SECRET" "POSTGRES_SSL=true" --output none
 
 read -r -p "E-mail do administrador SIGE: " ADMIN_EMAIL
 read -r -s -p "Defina a senha desse administrador: " ADMIN_PASSWORD
@@ -59,7 +59,7 @@ if [[ -z "$ADMIN_EMAIL" || -z "$ADMIN_PASSWORD" ]]; then
   exit 1
 fi
 
-psql "$CONNECTION" +  -v ON_ERROR_STOP=1 +  -v admin_email="$ADMIN_EMAIL" +  -v admin_password="$ADMIN_PASSWORD" <<'SQL'
+psql "$CONNECTION" -v ON_ERROR_STOP=1 -v admin_email="$ADMIN_EMAIL" -v admin_password="$ADMIN_PASSWORD" <<'SQL'
 insert into app_user (name, email, password_hash, role, client_ids)
 values (
   'Administrador ElevaLife',
