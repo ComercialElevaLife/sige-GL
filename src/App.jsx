@@ -1044,10 +1044,12 @@ function UsersPanel({ users, setUsers, data, token, centralReady }) {
   const [open, setOpen] = useState(false),
     [editingId, setEditingId] = useState(null),
     [f, setF] = useState(blank),
-    [feedback, setFeedback] = useState("");
+    [feedback, setFeedback] = useState(""),
+    [accessLink, setAccessLink] = useState("");
   const openCreate = () => {
     setEditingId(null);
     setF(blank());
+    setAccessLink("");
     setOpen(true);
   };
   const openEdit = (user) => {
@@ -1123,6 +1125,7 @@ function UsersPanel({ users, setUsers, data, token, centralReady }) {
       setOpen(false);
       if (invitationUrl) {
         navigator.clipboard?.writeText(invitationUrl).catch(() => {});
+        setAccessLink(invitationUrl);
         setFeedback(`Usuário criado. O e-mail ainda não está configurado; o link de convite foi copiado.`);
       } else setFeedback(editingId ? `Usuário ${account.name} atualizado.` : `Convite de primeiro acesso enviado para ${account.email}.`);
     } catch (remoteError) {
@@ -1142,7 +1145,10 @@ function UsersPanel({ users, setUsers, data, token, centralReady }) {
   const reinvite = async (account) => {
     try {
       const remote = await centralReinviteUser(token, account.id);
-      if (remote.invitationUrl) navigator.clipboard?.writeText(remote.invitationUrl).catch(() => {});
+      if (remote.invitationUrl) {
+        navigator.clipboard?.writeText(remote.invitationUrl).catch(() => {});
+        setAccessLink(remote.invitationUrl);
+      }
       setFeedback(remote.invitationUrl ? "E-mail não configurado; novo link copiado." : "Novo convite enviado por e-mail.");
     } catch (remoteError) {
       setFeedback(remoteError.message);
@@ -1164,6 +1170,11 @@ function UsersPanel({ users, setUsers, data, token, centralReady }) {
         </button>
       </section>
       {feedback && <div className="notice">{feedback}</div>}
+      {accessLink && <section className="card" style={{ padding: 14, marginBottom: 18 }}>
+        <strong>Link de convite de contingência</strong>
+        <p className="muted">Use somente enquanto o serviço de e-mail não estiver configurado.</p>
+        <button className="secondary" onClick={() => navigator.clipboard?.writeText(accessLink)}>Copiar link</button>
+      </section>}
       <section className="card">
         <div className="participants">
           {users.map((x) => (
