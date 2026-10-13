@@ -519,7 +519,7 @@ app.http("users", {
 app.http("usersList", {
   methods: ["POST"],
   authLevel: "anonymous",
-  route: "users/list",
+  route: "users-list",
   handler: async (request) => {
     try {
       const { session } = await request.json();
