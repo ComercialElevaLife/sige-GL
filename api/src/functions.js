@@ -74,7 +74,81 @@ function publicUrl(request, token, kind) {
   return url.toString();
 }
 
+const escapeHtml = (value) =>
+  String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+// Envio pela caixa sige@elevalife.com.br via Microsoft Graph (mesmo aplicativo registrado do SIGE Ergo).
+// Variáveis: GRAPH_TENANT_ID, GRAPH_CLIENT_ID, GRAPH_CLIENT_SECRET, GRAPH_CAIXA_ENVIO.
+let graphToken = { value: null, expiresAt: 0 };
+
+const graphConfigured = () =>
+  Boolean(process.env.GRAPH_TENANT_ID && process.env.GRAPH_CLIENT_ID && process.env.GRAPH_CLIENT_SECRET && process.env.GRAPH_CAIXA_ENVIO);
+
+async function getGraphToken() {
+  if (graphToken.value && Date.now() < graphToken.expiresAt - 30000) return graphToken.value;
+  const response = await fetch(
+    `https://login.microsoftonline.com/${encodeURIComponent(process.env.GRAPH_TENANT_ID)}/oauth2/v2.0/token`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: process.env.GRAPH_CLIENT_ID,
+        client_secret: process.env.GRAPH_CLIENT_SECRET,
+        scope: "https://graph.microsoft.com/.default",
+        grant_type: "client_credentials",
+      }).toString(),
+    },
+  );
+  if (!response.ok) throw new Error(`Graph token HTTP ${response.status}`);
+  const data = await response.json();
+  graphToken = { value: data.access_token, expiresAt: Date.now() + (Number(data.expires_in) || 3600) * 1000 };
+  return graphToken.value;
+}
+
+function accessEmailHtml({ name, url, intro }) {
+  const safeUrl = escapeHtml(url);
+  return `<div style="background:#F5EFEA;padding:24px;font-family:Montserrat,Segoe UI,Arial,sans-serif;color:#3A2A2E">
+  <div style="max-width:560px;margin:0 auto;background:#fff;border:1px solid #EADDE0;border-radius:12px;overflow:hidden">
+    <div style="background:#5E2A30;color:#fff;padding:18px 24px;font-size:18px;font-weight:600">SIGE GL · ElevaLife</div>
+    <div style="padding:24px;font-size:15px;line-height:1.6">
+      <p>Olá, ${escapeHtml(name)}.</p>
+      <p>${escapeHtml(intro)}</p>
+      <p style="margin:28px 0"><a href="${safeUrl}" style="background:#8B3A42;color:#fff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:600;display:inline-block">Acessar o SIGE GL</a></p>
+      <p style="color:#8A7A78;font-size:13px">Se o botão não funcionar, copie e cole este link no navegador:<br>${safeUrl}</p>
+      <p style="color:#8A7A78;font-size:13px">Se você não solicitou este acesso, ignore esta mensagem.</p>
+    </div>
+  </div>
+</div>`;
+}
+
+async function sendViaGraph({ to, name, url, subject, intro }) {
+  const token = await getGraphToken();
+  const response = await fetch(
+    `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(process.env.GRAPH_CAIXA_ENVIO)}/sendMail`,
+    {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        message: {
+          subject,
+          body: { contentType: "HTML", content: accessEmailHtml({ name, url, intro }) },
+          toRecipients: [{ emailAddress: { address: to } }],
+        },
+        saveToSentItems: true,
+      }),
+    },
+  );
+  return response.ok;
+}
+
 async function sendAccessEmail({ to, name, url, subject, intro }) {
+  if (graphConfigured()) {
+    try {
+      return { sent: await sendViaGraph({ to, name, url, subject, intro }), configured: true };
+    } catch {
+      return { sent: false, configured: true };
+    }
+  }
   if (process.env.EMAIL_WEBHOOK_URL) {
     try {
       const response = await fetch(process.env.EMAIL_WEBHOOK_URL, {
