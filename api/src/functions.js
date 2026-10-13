@@ -50,8 +50,8 @@ function tokenHash(value) {
   return createHash("sha256").update(value).digest("hex");
 }
 
-async function requireAdmin(request) {
-  const user = await userFrom(request);
+async function requireAdmin(request, suppliedToken = "") {
+  const user = await userFrom(request, suppliedToken);
   if (user.role !== "admin") throw new Error("Acesso restrito ao administrador.");
   return user;
 }
@@ -153,6 +153,8 @@ function scopedSnapshot(state, user) {
     data: {
       clients: (data.clients || []).filter((item) => allowedClients.has(item.id)),
       units,
+      workShifts: (data.workShifts || []).filter((item) => allowedClients.has(item.clientId)),
+      routines: data.routines || [],
       sectors: (data.sectors || []).filter((item) => unitIds.has(item.unitId)),
       locations: (data.locations || []).filter((item) => unitIds.has(item.unitId)),
       people,
