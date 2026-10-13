@@ -33,6 +33,7 @@ import {
   centralCreateUser,
   centralDeleteUser,
   centralLogin,
+  centralLogout,
   centralRequestReset,
   centralResetPassword,
   centralReinviteUser,
@@ -76,162 +77,21 @@ const cancelReasons = {
   eleva: ["Ausência do professor"],
 };
 const seed = {
-  clients: [{ id: "C-1", name: "LIBBS" }],
-  units: [{ id: "U-1", clientId: "C-1", name: "Unidade Farmacêutica" }],
-  sectors: [
-    { id: "S-1", unitId: "U-1", name: "Administrativo" },
-    { id: "S-2", unitId: "U-1", name: "Produção" },
-    { id: "S-3", unitId: "U-1", name: "Logística" },
-  ],
-  locations: [
-    { id: "L-1", unitId: "U-1", name: "Sala de treinamento" },
-    { id: "L-2", unitId: "U-1", name: "Área de produção" },
-    { id: "L-3", unitId: "U-1", name: "Área de expedição" },
-  ],
-  workShifts: [
-    { id: "T-1", clientId: "C-1", name: "Administrativo", start: "08:00", end: "17:00", scale: "5x2" },
-    { id: "T-2", clientId: "C-1", name: "1º turno", start: "06:00", end: "14:00", scale: "6x1" },
-    { id: "T-3", clientId: "C-1", name: "2º turno", start: "14:00", end: "22:00", scale: "6x1" },
-    { id: "T-4", clientId: "C-1", name: "3º turno", start: "22:00", end: "06:00", scale: "6x1" },
-  ],
+  clients: [],
+  units: [],
+  sectors: [],
+  locations: [],
+  workShifts: [],
   routines: [
     { id: "R-1", name: "Alongamento e mobilidade" },
     { id: "R-2", name: "Postura e conscientização corporal" },
     { id: "R-3", name: "Relaxamento e respiração" },
     { id: "R-4", name: "Fortalecimento leve" },
   ],
-  people: [
-    ["P-1", "Ana Clara Souza", "M-1001", "S-1", "L-1", "Administrativo"],
-    ["P-2", "Bruno Henrique Lima", "M-1002", "S-1", "L-1", "Administrativo"],
-    ["P-3", "Carla Mendes", "M-1003", "S-2", "L-2", "1º turno"],
-    ["P-4", "Diego Santos", "M-1004", "S-2", "L-2", "1º turno"],
-    ["P-5", "Elisa Ferreira", "M-1005", "S-2", "L-2", "2º turno"],
-    ["P-6", "Felipe Rocha", "M-1006", "S-2", "L-2", "2º turno"],
-    ["P-7", "Gabriela Alves", "M-1007", "S-3", "L-3", "3º turno"],
-    ["P-8", "Hugo Martins", "M-1008", "S-3", "L-3", "3º turno"],
-  ].map(([id, name, registration, sectorId, locationId, shift]) => ({
-    id,
-    name,
-    registration,
-    document: "",
-    active: true,
-    clientId: "C-1",
-    unitId: "U-1",
-    sectorId,
-    locationId,
-    shift,
-  })),
-  users: [
-    {
-      id: "A-1",
-      name: "Administrador Eleva",
-      email: "admin@elevalife.com.br",
-      password: "eleva123",
-      role: "admin",
-    },
-    {
-      id: "PR-1",
-      name: "Mariana Costa",
-      email: "mariana@elevalife.com.br",
-      password: "eleva123",
-      role: "professor",
-      clientId: "C-1",
-      unitId: "U-1",
-    },
-    {
-      id: "CL-1",
-      name: "Gestor LIBBS",
-      email: "gestor@libbs.com.br",
-      password: "eleva123",
-      role: "client",
-      clientId: "C-1",
-      unitId: "U-1",
-    },
-  ],
-  schedules: [
-    { id: "PL-1", clientId: "C-1", unitId: "U-1", sectorId: "S-1", locationId: "L-1", shift: "Administrativo", weekday: 1, time: "09:00" },
-    { id: "PL-2", clientId: "C-1", unitId: "U-1", sectorId: "S-1", locationId: "L-1", shift: "Administrativo", weekday: 3, time: "09:00" },
-    { id: "PL-3", clientId: "C-1", unitId: "U-1", sectorId: "S-2", locationId: "L-2", shift: "1º turno", weekday: 2, time: "06:30" },
-    { id: "PL-4", clientId: "C-1", unitId: "U-1", sectorId: "S-2", locationId: "L-2", shift: "2º turno", weekday: 4, time: "14:00" },
-  ],
+  people: [],
+  users: [],
+  schedules: [],
 };
-function demoScenario() {
-  const companies = [
-    {
-      id: "C-DEMO-1", name: "Aurum Alimentos", unit: "Unidade Paulista",
-      sectorNames: ["Administrativo", "Operação"], locationNames: ["Auditório", "Área de produção"],
-      people: ["Anitta", "Lázaro Ramos", "Taís Araújo", "Wagner Moura", "Fernanda Torres", "Seu Jorge", "Ingrid Guimarães", "Juliette Freire", "Cauã Reymond", "Iza"],
-      weekdays: [1, 3, 5], times: ["08:00", "14:00", "17:30"],
-    },
-    {
-      id: "C-DEMO-2", name: "Horizonte Logística", unit: "Centro de Distribuição Guarulhos",
-      sectorNames: ["Expedição", "Armazenagem"], locationNames: ["Pátio logístico", "Sala operacional"],
-      people: ["Paulo Vieira", "Alice Braga", "Rodrigo Santoro", "Dira Paes", "Emicida", "Sabrina Sato", "Daniel Kaluuya", "Viola Davis", "Lupita Nyong'o", "Zendaya"],
-      weekdays: [2, 4, 5], times: ["06:30", "13:30", "21:00"],
-    },
-    {
-      id: "C-DEMO-3", name: "Vértice Tecnologia", unit: "Campus Vila Olímpia",
-      sectorNames: ["Produto e Tecnologia", "Atendimento"], locationNames: ["Hub de inovação", "Sala de convivência"],
-      people: ["Selton Mello", "Débora Nascimento", "Marcos Palmeira", "Adriana Esteves", "Fábio Porchat", "Linn da Quebrada", "Lázaro Ramos Filho", "Rihanna", "Pedro Pascal", "Lupita Amondi"],
-      weekdays: [1, 2, 4, 5], times: ["09:30", "12:30", "16:30", "18:00"],
-    },
-  ];
-  const result = { clients: [], units: [], sectors: [], locations: [], workShifts: [], people: [], schedules: [], classes: [], attendance: {}, audit: [] };
-  companies.forEach((company, companyIndex) => {
-    const unitId = `U-DEMO-${companyIndex + 1}`;
-    const sectorIds = [`S-DEMO-${companyIndex + 1}-1`, `S-DEMO-${companyIndex + 1}-2`];
-    const locationIds = [`L-DEMO-${companyIndex + 1}-1`, `L-DEMO-${companyIndex + 1}-2`];
-    result.clients.push({ id: company.id, name: company.name });
-    result.workShifts.push({ id: `T-DEMO-${companyIndex + 1}-1`, clientId: company.id, name: "Administrativo", start: "08:00", end: "17:00", scale: "5x2" });
-    result.workShifts.push({ id: `T-DEMO-${companyIndex + 1}-2`, clientId: company.id, name: "Operacional", start: "06:00", end: "14:00", scale: "6x1" });
-    result.units.push({ id: unitId, clientId: company.id, name: company.unit });
-    company.sectorNames.forEach((name, index) => result.sectors.push({ id: sectorIds[index], unitId, name }));
-    company.locationNames.forEach((name, index) => result.locations.push({ id: locationIds[index], unitId, name }));
-    company.people.forEach((name, index) => {
-      const personId = `P-DEMO-${companyIndex + 1}-${index + 1}`;
-      const status = index < 7 ? "present" : index < 9 ? "absent" : "missing";
-      const sectorIndex = index % 2;
-      result.people.push({
-        id: personId, name, registration: `DEM${companyIndex + 1}${String(index + 1).padStart(3, "0")}`,
-        document: "", clientId: company.id, unitId, sectorId: sectorIds[sectorIndex],
-        locationId: locationIds[sectorIndex], shift: shifts[index % shifts.length],
-      });
-      result.attendance[personId] = {
-        status, method: index < 7 ? (index % 2 ? "qr_face" : "manual") : "manual",
-        at: new Date(Date.now() - (index + companyIndex) * 86400000).toISOString(),
-        teacherId: "PR-1", sectorId: sectorIds[sectorIndex], locationId: locationIds[sectorIndex],
-        shift: shifts[index % shifts.length], roteiro: "Alongamento e mobilidade",
-      };
-    });
-    company.weekdays.forEach((weekday, index) => result.schedules.push({
-      id: `PL-DEMO-${companyIndex + 1}-${index + 1}`, clientId: company.id, unitId,
-      sectorId: sectorIds[index % 2], locationId: locationIds[index % 2],
-      shift: shifts[index % shifts.length], weekday, time: company.times[index],
-    }));
-    Array.from({ length: companyIndex === 2 ? 10 : 8 }, (_, index) => {
-      const applied = index % 5 !== 4;
-      const sectorIndex = index % 2;
-      const at = new Date(Date.now() - (index * 2 + companyIndex) * 86400000).toISOString();
-      const id = `AULA-DEMO-${companyIndex + 1}-${index + 1}`;
-      const certificate = `GL-DEMO${companyIndex + 1}${String(index + 1).padStart(2, "0")}-VALIDADO`;
-      result.classes.push({
-        id, clientId: company.id, unitId, sectorId: sectorIds[sectorIndex], locationId: locationIds[sectorIndex],
-        shift: shifts[index % shifts.length], roteiro: "Alongamento e mobilidade", status: applied ? "applied" : "cancelled",
-        cancelledBy: applied ? undefined : (index % 2 ? "client" : "eleva"),
-        reason: applied ? undefined : (index % 2 ? cancelReasons.client[index % cancelReasons.client.length] : cancelReasons.eleva[0]),
-        at, teacherId: "PR-1", representativeRegistration: applied ? `RESP${companyIndex + 1}${index + 1}` : undefined,
-        certificate: applied ? certificate : undefined,
-      });
-      result.audit.push({
-        id: `LOG-DEMO-${companyIndex + 1}-${index + 1}`, event: applied ? "Aula encerrada e validada pelo representante" : "Aula cancelada",
-        teacherId: "PR-1", teacherName: "Mariana Costa", at,
-        location: { latitude: "-23.55052", longitude: "-46.63331", accuracy: 18 },
-        representativeRegistration: applied ? `RESP${companyIndex + 1}${index + 1}` : undefined, certificate: applied ? certificate : undefined,
-      });
-    });
-  });
-  return result;
-}
 const read = (key, fallback) => {
   try {
     return JSON.parse(localStorage.getItem(key)) ?? fallback;
@@ -306,7 +166,7 @@ function Modal({ title, onClose, children }) {
     </div>
   );
 }
-function Login({ users, onLogin, onCentralLogin, onActivate, onRequestReset, onResetPassword, setUsers }) {
+function Login({ notice, onCentralLogin, onActivate, onRequestReset, onResetPassword }) {
   const accessLink = new URLSearchParams(window.location.search),
     invitation = accessLink.get("invite"),
     resetToken = accessLink.get("reset"),
@@ -315,25 +175,15 @@ function Login({ users, onLogin, onCentralLogin, onActivate, onRequestReset, onR
     [password, setPassword] = useState(""),
     [error, setError] = useState(""),
     [mode, setMode] = useState(linkedPassword ? "first" : "login"),
-    [message, setMessage] = useState("");
+    [message, setMessage] = useState(notice || "");
   const submit = async (e) => {
     e.preventDefault();
-    if (navigator.onLine) {
-      try {
-        const session = await onCentralLogin(email, password);
-        if (session) return;
-      } catch (remoteError) {
-        setError(remoteError.message);
-        return;
-      }
+    if (!navigator.onLine) return setError("Sem conexão. O login precisa de internet.");
+    try {
+      await onCentralLogin(email, password);
+    } catch (remoteError) {
+      setError(remoteError.message);
     }
-    const user = users.find(
-      (x) =>
-        x.email.toLowerCase() === email.toLowerCase() &&
-        x.password === password,
-    );
-    if (!user) return setError("E-mail ou senha inválidos.");
-    onLogin(user);
   };
   const firstAccess = async (e) => {
     e.preventDefault();
@@ -350,39 +200,18 @@ function Login({ users, onLogin, onCentralLogin, onActivate, onRequestReset, onR
       }
       return;
     }
-    const user = users.find((x) => x.email.toLowerCase() === email.toLowerCase());
-    if (!user) return setError("Não localizamos este e-mail.");
-    if (password.length < 8) return setError("Crie uma senha com pelo menos 8 caracteres.");
-    setUsers((current) => current.map((x) => x.id === user.id ? {
-      ...x,
-      password,
-      activationStatus: "active",
-      activatedAt: new Date().toISOString(),
-    } : x));
-    setError("");
-    setMessage("Senha criada. Entre com seu e-mail e a nova senha.");
-    setMode("login");
-    setPassword("");
+    setError("Use o link de primeiro acesso enviado por e-mail pelo administrador.");
   };
   const resetPassword = async (e) => {
     e.preventDefault();
-    if (navigator.onLine) {
-      try {
-        await onRequestReset(email);
-        setError("");
-        setMessage("Se o e-mail estiver cadastrado, você receberá as instruções.");
-      } catch (remoteError) {
-        setError(remoteError.message);
-      }
-      return;
+    if (!navigator.onLine) return setError("Sem conexão. Tente novamente quando estiver online.");
+    try {
+      await onRequestReset(email);
+      setError("");
+      setMessage("Se o e-mail estiver cadastrado, você receberá as instruções.");
+    } catch (remoteError) {
+      setError(remoteError.message);
     }
-    const user = users.find((x) => x.email.toLowerCase() === email.toLowerCase());
-    if (user) setUsers((current) => current.map((x) => x.id === user.id ? {
-      ...x,
-      resetRequestedAt: new Date().toISOString(),
-    } : x));
-    setError("");
-    setMessage("Solicitação registrada. As instruções serão entregues quando o serviço de e-mail estiver configurado.");
   };
   const action = mode === "first" ? firstAccess : mode === "reset" ? resetPassword : submit;
   return (
@@ -1258,16 +1087,7 @@ function UsersPanel({ users, setUsers, data, token, centralReady }) {
         account = normalizeUser(remote.user);
         invitationUrl = remote.invitationUrl;
       } else {
-        account = editingId
-          ? { ...existing, ...base, ...access }
-          : {
-            ...base,
-            ...access,
-            password: "",
-            activationStatus: "pending",
-            invitationSentAt: new Date().toISOString(),
-          };
-        account = normalizeUser(account);
+        throw new Error("Conecte-se à internet como administrador para gerenciar usuários.");
       }
       setUsers((current) => editingId
         ? current.map((user) => user.id === editingId ? account : user)
@@ -1276,7 +1096,7 @@ function UsersPanel({ users, setUsers, data, token, centralReady }) {
       if (invitationUrl) {
         navigator.clipboard?.writeText(invitationUrl).catch(() => {});
         setAccessLink(invitationUrl);
-        setFeedback(`Usuário criado. O e-mail ainda não está configurado; o link de convite foi copiado.`);
+        setFeedback("Usuário criado, mas o e-mail não foi enviado. O link de convite foi copiado.");
       } else setFeedback(editingId ? `Usuário ${account.name} atualizado.` : `Convite de primeiro acesso enviado para ${account.email}.`);
     } catch (remoteError) {
       setFeedback(remoteError.message);
@@ -1285,7 +1105,8 @@ function UsersPanel({ users, setUsers, data, token, centralReady }) {
   const remove = async (account) => {
     if (!window.confirm(`Excluir o acesso de ${account.name}?`)) return;
     try {
-      if (centralReady && token) await centralDeleteUser(token, account.id);
+      if (!centralReady || !token) throw new Error("Conecte-se à internet como administrador para excluir usuários.");
+      await centralDeleteUser(token, account.id);
       setUsers((current) => current.filter((item) => item.id !== account.id));
       setFeedback(`Usuário ${account.name} excluído.`);
     } catch (remoteError) {
@@ -1299,7 +1120,7 @@ function UsersPanel({ users, setUsers, data, token, centralReady }) {
         navigator.clipboard?.writeText(remote.invitationUrl).catch(() => {});
         setAccessLink(remote.invitationUrl);
       }
-      setFeedback(remote.invitationUrl ? "E-mail não configurado; novo link copiado." : "Novo convite enviado por e-mail.");
+      setFeedback(remote.invitationUrl ? "O e-mail não foi enviado. O novo link foi copiado." : "Novo convite enviado por e-mail.");
     } catch (remoteError) {
       setFeedback(remoteError.message);
     }
@@ -1871,7 +1692,7 @@ export default function App() {
     routines: read(K.routines, seed.routines),
     people: read(K.people, seed.people),
   }));
-  const [users, setUsers] = useState(() => read(K.users, seed.users).map(normalizeUser)),
+  const [users, setUsers] = useState([]),
     [schedules, setSchedules] = useState(() => read(K.schedules, seed.schedules)),
     [classes, setClasses] = useState(() => read(K.classes, [])),
     [attendance, setAttendance] = useState(() => read(K.attendance, {})),
@@ -1884,6 +1705,7 @@ export default function App() {
       return read(K.auth, null);
     }),
     [token, setToken] = useState(() => (hasAccessLink() ? "" : read(K.token, ""))),
+    [loginNotice, setLoginNotice] = useState(""),
     [centralReady, setCentralReady] = useState(false),
     [syncStatus, setSyncStatus] = useState("local"),
     [page, setPage] = useState("dashboard"),
@@ -1912,32 +1734,28 @@ export default function App() {
   useEffect(() => {
     Object.entries(data).forEach(([k, v]) => write(K[k], v));
   }, [data]);
-  useEffect(() => write(K.users, users), [users]);
   useEffect(() => write(K.classes, classes), [classes]);
   useEffect(() => write(K.attendance, attendance), [attendance]);
   useEffect(() => write(K.audit, audit), [audit]);
   useEffect(() => write(K.schedules, schedules), [schedules]);
   useEffect(() => {
-    const demoMarker = "gl-demo-scenario-v1";
-    if (localStorage.getItem(demoMarker)) return;
-    const demo = demoScenario();
-    const appendMissing = (current, additions) => [
-      ...current,
-      ...additions.filter((item) => !current.some((existing) => existing.id === item.id)),
-    ];
-    setData((current) => ({
-      clients: appendMissing(current.clients, demo.clients),
-      units: appendMissing(current.units, demo.units),
-      sectors: appendMissing(current.sectors, demo.sectors),
-      locations: appendMissing(current.locations, demo.locations),
-      workShifts: appendMissing(current.workShifts, demo.workShifts),
-      people: appendMissing(current.people, demo.people),
-    }));
-    setSchedules((current) => appendMissing(current, demo.schedules));
-    setClasses((current) => appendMissing(current, demo.classes));
-    setAttendance((current) => ({ ...demo.attendance, ...current }));
-    setAudit((current) => appendMissing(current, demo.audit));
-    localStorage.setItem(demoMarker, "loaded");
+    // Remove senhas locais e marcador de demonstração gravados por versões anteriores.
+    ["gl-users", "gl-demo-scenario-v1"].forEach((key) => localStorage.removeItem(key));
+  }, []);
+  useEffect(() => {
+    // A API respondeu 401: a sessão acabou. Volta ao login sem apagar o que ainda não foi sincronizado.
+    const expired = () => {
+      localStorage.removeItem(K.auth);
+      localStorage.removeItem(K.token);
+      restoreStarted.current = false;
+      setToken("");
+      setCentralReady(false);
+      setSyncStatus("local");
+      setUser(null);
+      setLoginNotice("Sua sessão expirou. Entre novamente.");
+    };
+    window.addEventListener("sige-session-expired", expired);
+    return () => window.removeEventListener("sige-session-expired", expired);
   }, []);
   useEffect(() => {
     if (restoreStarted.current || !token || !user || !navigator.onLine) return;
@@ -2009,13 +1827,7 @@ export default function App() {
   if (!user)
     return (
       <Login
-        users={users}
-        setUsers={setUsers}
-        onLogin={(u) => {
-          setUser(u);
-          write(K.auth, u);
-          setPage(u.role === "professor" ? "collect" : "dashboard");
-        }}
+        notice={loginNotice}
         onCentralLogin={startCentralSession}
         onActivate={centralActivate}
         onRequestReset={centralRequestReset}
@@ -2072,13 +1884,11 @@ export default function App() {
             {user.name} · {roles[user.role]}
           </span>
           <button
-            onClick={() => {
-              localStorage.removeItem(K.auth);
-              localStorage.removeItem(K.token);
-              setToken("");
-              setCentralReady(false);
-              setSyncStatus("local");
-              setUser(null);
+            onClick={async () => {
+              if (syncStatus === "pendente" && !window.confirm("Há dados ainda não sincronizados neste aparelho. Sair mesmo assim?")) return;
+              if (token) await centralLogout(token).catch(() => {});
+              Object.values(K).forEach((key) => localStorage.removeItem(key));
+              window.location.replace(window.location.pathname);
             }}
           >
             <LogOut size={17} />
