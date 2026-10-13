@@ -240,6 +240,15 @@ const read = (key, fallback) => {
   }
 };
 const write = (key, value) => localStorage.setItem(key, JSON.stringify(value));
+// Link de convite ou de redefinição: nunca reaproveita a sessão de quem já estava logado neste navegador.
+const hasAccessLink = () => {
+  const params = new URLSearchParams(window.location.search);
+  return params.has("invite") || params.has("reset");
+};
+const clearStoredSession = () => {
+  localStorage.removeItem(K.auth);
+  localStorage.removeItem(K.token);
+};
 const newid = (p) => `${p}-${crypto.randomUUID().slice(0, 8)}`;
 const nameOf = (list, id) => list.find((x) => x.id === id)?.name || "—";
 const personLabel = (person) => person.name?.trim() || `Colaborador ${person.registration || "sem identificação"}`;
@@ -1867,8 +1876,14 @@ export default function App() {
     [classes, setClasses] = useState(() => read(K.classes, [])),
     [attendance, setAttendance] = useState(() => read(K.attendance, {})),
     [audit, setAudit] = useState(() => read(K.audit, [])),
-    [user, setUser] = useState(() => read(K.auth, null)),
-    [token, setToken] = useState(() => read(K.token, "")),
+    [user, setUser] = useState(() => {
+      if (hasAccessLink()) {
+        clearStoredSession();
+        return null;
+      }
+      return read(K.auth, null);
+    }),
+    [token, setToken] = useState(() => (hasAccessLink() ? "" : read(K.token, ""))),
     [centralReady, setCentralReady] = useState(false),
     [syncStatus, setSyncStatus] = useState("local"),
     [page, setPage] = useState("dashboard"),
