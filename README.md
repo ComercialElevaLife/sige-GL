@@ -2,6 +2,10 @@
 
 Aplicação móvel independente para o profissional de Ginástica Laboral registrar presenças por QR Code e validação facial. Ela funciona no navegador do celular, mantém os cadastros e o registro da aula no dispositivo e foi estruturada para depois ser incorporada ao SIGE Ergo.
 
+## Titularidade e manutenção
+
+O SIGE GL é um produto da ElevaLife, mantido pela equipe de desenvolvimento da empresa (Leonardo, Alexandre e Cristiano). Alterações entram por branch + Pull Request, nunca direto na `main`, e passam por revisão de pelo menos um desenvolvedor antes do merge. Mudanças críticas (autenticação, dados pessoais, biometria) exigem a aprovação final do João.
+
 ## O que já funciona
 
 - Aula com participantes previstos e contador de adesão.
