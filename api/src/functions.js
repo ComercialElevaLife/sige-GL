@@ -459,7 +459,7 @@ app.http("userById", {
       const payload = await request.json().catch(() => ({}));
       const actor = await requireAdmin(request, payload.session);
       await userStore();
-      const id = request.params.get("id");
+      const id = request.params.id;
       if (request.method === "DELETE") {
         if (id === actor.id) return json({ error: "Não é permitido excluir o próprio acesso." }, 400);
         await query("delete from app_user where id = $1", [id]);
