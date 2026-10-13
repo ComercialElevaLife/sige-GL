@@ -34,7 +34,7 @@ export const centralSync = (token, state) => request("/sync", {
   body: JSON.stringify({ state, session: token }),
 });
 
-export const centralUsers = (token) => request("/users/list", {
+export const centralUsers = (token) => request("/users-list", {
   method: "POST",
   body: JSON.stringify({ session: token }),
 });
