@@ -13,11 +13,29 @@ const json = (body, status = 200) => ({
   headers: { "content-type": "application/json; charset=utf-8" },
 });
 
-const configurationError = (error) => json({ error: error.message }, 503);
+// Erros esperados carregam o status HTTP correto e uma mensagem segura para o usuário.
+class HttpError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
+// Qualquer outro erro (banco, rede, bug) vira 500 com mensagem genérica; o detalhe fica só no log do servidor.
+const configurationError = (error) => {
+  if (error?.code === "23505") return json({ error: "Já existe um usuário com este e-mail." }, 409);
+  if (error?.code === "22P02") return json({ error: "Identificador inválido." }, 400);
+  if (error instanceof HttpError) return json({ error: error.message }, error.status);
+  if (error?.message === "Banco de dados ainda não configurado.") {
+    return json({ error: "Serviço temporariamente indisponível." }, 503);
+  }
+  console.error("sige-gl-api", error);
+  return json({ error: "Não foi possível concluir a operação. Tente novamente." }, 500);
+};
 
 async function userFrom(request, suppliedToken = "") {
   const token = suppliedToken || request.headers.get("x-sige-session") || request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
-  if (!token) throw new Error("Sessão não informada.");
+  if (!token) throw new HttpError(401, "Sessão não informada.");
   await sessionStore();
   const result = await query(
     `select u.id, u.name, u.email, u.role, u.client_ids, u.active
@@ -26,7 +44,7 @@ async function userFrom(request, suppliedToken = "") {
     [tokenHash(token)],
   );
   const account = result.rows[0];
-  if (!account) throw new Error("Sessão expirada. Entre novamente.");
+  if (!account) throw new HttpError(401, "Sessão expirada. Entre novamente.");
   return { id: account.id, name: account.name, email: account.email, role: account.role, clientIds: account.client_ids || [] };
 }
 
@@ -52,7 +70,7 @@ function tokenHash(value) {
 
 async function requireAdmin(request, suppliedToken = "") {
   const user = await userFrom(request, suppliedToken);
-  if (user.role !== "admin") throw new Error("Acesso restrito ao administrador.");
+  if (user.role !== "admin") throw new HttpError(403, "Acesso restrito ao administrador.");
   return user;
 }
 
@@ -61,17 +79,40 @@ function normalizeClientIds(role, input) {
   if (role === "admin") return [];
   if (role === "professor" && ids.length) return ids;
   if (role === "client" && ids.length === 1) return ids;
-  throw new Error(role === "professor"
+  throw new HttpError(400, role === "professor"
     ? "Professor deve possuir ao menos uma empresa vinculada."
     : "Usuário cliente deve possuir uma única empresa vinculada.");
 }
 
+// O link enviado por e-mail usa APP_PUBLIC_URL. Sem ela, só aceita o Origin da própria aplicação
+// (Static Web Apps ou domínio elevalife.com.br); um Origin qualquer permitiria envenenar o link.
 function publicUrl(request, token, kind) {
-  const origin = process.env.APP_PUBLIC_URL || request.headers.get("origin") || "";
-  if (!origin) return null;
+  let origin = process.env.APP_PUBLIC_URL || "";
+  if (!origin) {
+    const candidate = request.headers.get("origin") || "";
+    try {
+      const host = new URL(candidate).hostname;
+      if (host.endsWith(".azurestaticapps.net") || host === "elevalife.com.br" || host.endsWith(".elevalife.com.br")) origin = candidate;
+    } catch {
+      origin = "";
+    }
+  }
+  if (!origin) throw new HttpError(500, "Endereço público do aplicativo não configurado. Avise o administrador do sistema.");
   const url = new URL(origin);
   url.searchParams.set(kind, token);
   return url.toString();
+}
+
+// Limite simples de tentativas de login por e-mail e origem de rede (por instância da função).
+const loginAttempts = new Map();
+function loginThrottle(key, failed = false) {
+  const now = Date.now();
+  const windowMs = 15 * 60 * 1000;
+  const entry = (loginAttempts.get(key) || []).filter((time) => now - time < windowMs);
+  if (failed) entry.push(now);
+  loginAttempts.set(key, entry);
+  if (loginAttempts.size > 5000) loginAttempts.clear();
+  return entry.length;
 }
 
 const escapeHtml = (value) =>
@@ -172,7 +213,7 @@ async function sendAccessEmail({ to, name, url, subject, intro }) {
       content: {
         subject,
         plainText: `${intro}\n\nAcesse: ${url}\n\nSe você não solicitou este acesso, ignore esta mensagem.`,
-        html: `<p>Olá, ${name}.</p><p>${intro}</p><p><a href="${url}">Acessar SIGE GL</a></p><p>Se você não solicitou este acesso, ignore esta mensagem.</p>`,
+        html: accessEmailHtml({ name, url, intro }),
       },
     });
     await poller.pollUntilDone();
@@ -194,8 +235,19 @@ async function stateStore() {
   `);
 }
 
+// Migração única de client_ids para text[]: só altera a tabela se o tipo ainda não for lista de textos.
 async function userStore() {
-  userSchemaReady ??= query("alter table app_user alter column client_ids type text[] using client_ids::text[];");
+  userSchemaReady ??= (async () => {
+    const column = await query(
+      "select data_type from information_schema.columns where table_name = 'app_user' and column_name = 'client_ids'",
+    );
+    if (column.rows[0] && column.rows[0].data_type !== "ARRAY") {
+      await query("alter table app_user alter column client_ids type text[] using client_ids::text[]");
+    }
+  })().catch((error) => {
+    userSchemaReady = undefined;
+    throw error;
+  });
   await userSchemaReady;
 }
 
@@ -283,13 +335,18 @@ app.http("login", {
   handler: async (request) => {
     try {
       const { email, password } = await request.json();
+      const throttleKey = `${String(email || "").toLowerCase()}|${request.headers.get("x-forwarded-for") || ""}`;
+      if (loginThrottle(throttleKey) >= 8) {
+        return json({ error: "Muitas tentativas. Aguarde alguns minutos e tente novamente." }, 429);
+      }
       await userStore();
       const result = await query(
         "select id, name, email, password_hash, role, client_ids, active from app_user where lower(email) = lower($1)",
-        [email],
+        [String(email || "")],
       );
       const account = result.rows[0];
-      if (!account?.active || !(await bcrypt.compare(password || "", account.password_hash))) {
+      if (!account?.active || !(await bcrypt.compare(String(password || ""), account.password_hash))) {
+        loginThrottle(throttleKey, true);
         return json({ error: "E-mail ou senha inválidos." }, 401);
       }
       const user = {
@@ -333,6 +390,8 @@ app.http("activateAccount", {
          invitation_token_hash = null, invitation_expires_at = null where id = $2`,
         [await bcrypt.hash(password, 12), account.id],
       );
+      await sessionStore();
+      await query("delete from app_session where user_id = $1", [account.id]);
       return json({ message: "Senha definida. Você já pode entrar." });
     } catch (error) {
       return configurationError(error);
@@ -356,14 +415,17 @@ app.http("requestPasswordReset", {
          reset_expires_at = now() + interval '60 minutes' where id = $2`,
         [tokenHash(token), account.id],
       );
-      const url = publicUrl(request, token, "reset");
-      await sendAccessEmail({
-        to: account.email,
-        name: account.name,
-        url,
-        subject: "Redefinição de senha · SIGE GL",
-        intro: "Recebemos uma solicitação para redefinir sua senha.",
-      });
+      try {
+        await sendAccessEmail({
+          to: account.email,
+          name: account.name,
+          url: publicUrl(request, token, "reset"),
+          subject: "Redefinição de senha · SIGE GL",
+          intro: "Recebemos uma solicitação para redefinir sua senha.",
+        });
+      } catch (error) {
+        console.error("sige-gl-api reset", error);
+      }
       return json({ message: "Se o e-mail estiver cadastrado, você receberá as instruções." }, 202);
     } catch (error) {
       return configurationError(error);
@@ -390,7 +452,28 @@ app.http("resetPassword", {
          reset_expires_at = null where id = $2`,
         [await bcrypt.hash(password, 12), account.id],
       );
+      await sessionStore();
+      await query("delete from app_session where user_id = $1", [account.id]);
       return json({ message: "Senha redefinida. Você já pode entrar." });
+    } catch (error) {
+      return configurationError(error);
+    }
+  },
+});
+
+app.http("logout", {
+  methods: ["POST"],
+  authLevel: "anonymous",
+  route: "auth/logout",
+  handler: async (request) => {
+    try {
+      const body = await request.json().catch(() => ({}));
+      const token = body.session || request.headers.get("x-sige-session") || "";
+      if (token) {
+        await sessionStore();
+        await query("delete from app_session where token_hash = $1", [tokenHash(token)]);
+      }
+      return json({ loggedOut: true });
     } catch (error) {
       return configurationError(error);
     }
@@ -410,6 +493,7 @@ app.http("users", {
         return json({ error: "Nome, e-mail e perfil válido são obrigatórios." }, 400);
       }
       const invitation = accessToken();
+      const invitationUrl = publicUrl(request, invitation, "invite");
       const ids = normalizeClientIds(role, clientIds);
       const result = await query(
         `insert into app_user (name, email, password_hash, role, client_ids, active, invitation_token_hash, invitation_expires_at)
@@ -418,7 +502,6 @@ app.http("users", {
         [name.trim(), email.trim(), await bcrypt.hash(accessToken(), 12), role, ids, tokenHash(invitation)],
       );
       const account = result.rows[0];
-      const invitationUrl = publicUrl(request, invitation, "invite");
       const delivery = await sendAccessEmail({
         to: account.email,
         name: account.name,
@@ -469,13 +552,16 @@ app.http("userById", {
         const found = await query("select * from app_user where id = $1", [id]);
         const account = found.rows[0];
         if (!account) return json({ error: "Usuário não encontrado." }, 404);
+        if (account.active) {
+          return json({ error: "Este usuário já definiu a senha. Use \"Esqueci minha senha\" para redefinir o acesso." }, 409);
+        }
         const invitation = accessToken();
+        const invitationUrl = publicUrl(request, invitation, "invite");
         await query(
-          `update app_user set active = false, invitation_token_hash = $1,
+          `update app_user set invitation_token_hash = $1,
            invitation_expires_at = now() + interval '7 days' where id = $2`,
           [tokenHash(invitation), id],
         );
-        const invitationUrl = publicUrl(request, invitation, "invite");
         const delivery = await sendAccessEmail({
           to: account.email,
           name: account.name,
@@ -489,11 +575,14 @@ app.http("userById", {
       if (!name?.trim() || !email?.trim() || !["admin", "professor", "client"].includes(role)) {
         return json({ error: "Nome, e-mail e perfil válido são obrigatórios." }, 400);
       }
+      if (id === actor.id && (role !== "admin" || active === false)) {
+        return json({ error: "Não é permitido remover o próprio acesso de administrador." }, 400);
+      }
       const result = await query(
         `update app_user set name = $1, email = lower($2), role = $3,
-         client_ids = $4::text[], active = $5 where id = $6
+         client_ids = $4::text[], active = coalesce($5::boolean, active) where id = $6
          returning id, name, email, role, client_ids, active, created_at`,
-        [name.trim(), email.trim(), role, normalizeClientIds(role, clientIds), active !== false, id],
+        [name.trim(), email.trim(), role, normalizeClientIds(role, clientIds), typeof active === "boolean" ? active : null, id],
       );
       if (!result.rows[0]) return json({ error: "Usuário não encontrado." }, 404);
       return json({ user: publicUser(result.rows[0]) });
