@@ -8,9 +8,16 @@ async function request(path, options = {}) {
     ...options,
   });
   const body = await response.json().catch(() => ({}));
+  // Sessão expirada em chamada autenticada: o app volta ao login. As rotas /auth/* respondem 401 por senha errada.
+  if (response.status === 401 && !path.startsWith("/auth/")) window.dispatchEvent(new Event("sige-session-expired"));
   if (!response.ok) throw new Error(body.error || "Não foi possível comunicar com o servidor.");
   return body;
 }
+
+export const centralLogout = (token) => request("/auth/logout", {
+  method: "POST",
+  body: JSON.stringify({ session: token }),
+});
 
 export const centralLogin = (email, password) => request("/auth/login", {
   method: "POST",
