@@ -13,6 +13,7 @@ async function request(path, options = {}) {
   if (!response.ok) {
     const error = new Error(body.error || "Não foi possível comunicar com o servidor.");
     error.status = response.status;
+    error.conflict = body.conflict === true;
     throw error;
   }
   return body;
@@ -33,9 +34,9 @@ export const centralBootstrap = (token) => request("/bootstrap", {
   body: JSON.stringify({ session: token }),
 });
 
-export const centralSync = (token, state) => request("/sync", {
+export const centralSync = (token, state, baseVersion) => request("/sync", {
   method: "POST",
-  body: JSON.stringify({ state, session: token }),
+  body: JSON.stringify({ state, session: token, baseVersion }),
 });
 
 export const centralUsers = (token) => request("/users-list", {
