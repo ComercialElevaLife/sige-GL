@@ -25,6 +25,7 @@ import {
   X,
 } from "lucide-react";
 import { verifyFace } from "./biometrics";
+import { queueClass, flushClasses, pendingClasses } from "./classOutbox";
 import { generateDashboardReport } from "./report";
 import { plannedClassesForMonth, weekdays } from "./scheduling";
 import {
@@ -1218,9 +1219,62 @@ function UsersPanel({ users, setUsers, data, token, centralReady }) {
   );
 }
 
+const EVIDENCE_MAX_WIDTH = 640;
+
+// Foto de evidência do fechamento da aula. Só captura e envia: não compara nem reconhece ninguém.
+function EvidencePhoto({ onConfirm, onBack, saving }) {
+  const video = useRef(),
+    stream = useRef(),
+    [error, setError] = useState(""),
+    [shot, setShot] = useState("");
+  useEffect(() => {
+    if (shot) return undefined;
+    navigator.mediaDevices
+      ?.getUserMedia({ video: { facingMode: "user" } })
+      .then((s) => {
+        stream.current = s;
+        if (video.current) video.current.srcObject = s;
+      })
+      .catch(() => setError("Não foi possível abrir a câmera frontal."));
+    return () => stream.current?.getTracks().forEach((t) => t.stop());
+  }, [shot]);
+  const capture = () => {
+    const v = video.current;
+    if (!v?.videoWidth) return;
+    const scale = Math.min(1, EVIDENCE_MAX_WIDTH / v.videoWidth);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(v.videoWidth * scale);
+    canvas.height = Math.round(v.videoHeight * scale);
+    canvas.getContext("2d").drawImage(v, 0, 0, canvas.width, canvas.height);
+    setShot(canvas.toDataURL("image/jpeg", 0.7));
+  };
+  return (
+    <section className="card representative-confirmation">
+      <p className="eyebrow">EVIDÊNCIA DA AULA</p>
+      <h2>Foto de evidência</h2>
+      <p>
+        Fotografe o representante do local para registrar o fechamento da aula. A foto fica guardada apenas como evidência de auditoria,
+        por prazo limitado, e não é usada para reconhecimento facial.
+      </p>
+      {shot ? <img className="camera" style={{ transform: "none" }} src={shot} alt="Foto de evidência da aula" /> : <video className="camera" ref={video} autoPlay playsInline muted />}
+      {error && <p className="error">{error}</p>}
+      <div>
+        <button className="secondary" onClick={shot ? () => setShot("") : onBack} disabled={saving}>{shot ? "Tirar outra" : "Voltar"}</button>
+        {shot ? (
+          <button className="primary" onClick={() => onConfirm(shot, false)} disabled={saving}><Check size={17} /> {saving ? "Salvando…" : "Concluir aula"}</button>
+        ) : (
+          <button className="primary" onClick={capture} disabled={!!error}><Camera size={17} /> Tirar foto</button>
+        )}
+      </div>
+      {error && !shot && <button className="secondary full" onClick={() => onConfirm("", true)} disabled={saving}>Concluir sem foto (câmera indisponível)</button>}
+    </section>
+  );
+}
+
 function Collect({
   data,
   user,
+  token,
   classes,
   setClasses,
   attendance,
@@ -1234,6 +1288,10 @@ function Collect({
     [entryMode, setEntryMode] = useState(""),
     [scanFailures, setScanFailures] = useState(0),
     [face, setFace] = useState(null),
+    [classAttendance, setClassAttendance] = useState({}),
+    [startedAt, setStartedAt] = useState(""),
+    [representativeMethod, setRepresentativeMethod] = useState("matricula"),
+    [saving, setSaving] = useState(false),
     [notice, setNotice] = useState(""),
     [cancelledBy, setCancelledBy] = useState("client"),
     [reason, setReason] = useState(cancelReasons.client[0]),
@@ -1286,6 +1344,8 @@ function Collect({
           accuracy: p.coords.accuracy,
         };
         setLocation(loc);
+        setClassAttendance({});
+        setStartedAt(new Date().toISOString());
         setStage("collect");
         setEntryMode("");
         setScanFailures(0);
@@ -1307,37 +1367,44 @@ function Collect({
       { enableHighAccuracy: true, timeout: 15000 },
     );
   };
+  const sendClass = async (aula, presencas, photo, photoSkipped) => {
+    queueClass({ userId: user.id, aula, presencas, photo, photoSkipped });
+    if (token && navigator.onLine) await flushClasses(token, user.id).catch(() => {});
+    return pendingClasses(user.id) === 0;
+  };
   const cancel = (e) => {
     e.preventDefault();
-    setClasses((c) => [
-      ...c,
-      {
-        id: newid("AULA"),
-        clientId,
-        unitId,
-        ...classInfo,
-        status: "cancelled",
-        cancelledBy,
-        reason,
-        at: new Date().toISOString(),
-        teacherId: user.id,
-      },
-    ]);
+    const record = {
+      id: newid("AULA"),
+      clientId,
+      unitId,
+      ...classInfo,
+      status: "cancelled",
+      cancelledBy,
+      reason,
+      at: new Date().toISOString(),
+      teacherId: user.id,
+    };
+    setClasses((c) => [...c, record]);
+    sendClass({ ...record, sectorId: classInfo.sectorId, locationId: classInfo.locationId }, [], "", false);
     setStage("saved");
     setNotice("Cancelamento registrado.");
   };
-  const register = (person, method, status = "present") =>
+  const register = (person, method, status = "present") => {
+    const at = new Date().toISOString();
+    setClassAttendance((current) => ({ ...current, [person.id]: { status, method, at } }));
     setAttendance((a) => ({
       ...a,
       [person.id]: {
         status,
         method,
-        at: new Date().toISOString(),
+        at,
         teacherId: user.id,
         location,
         ...classInfo,
       },
     }));
+  };
   const read = (value) => {
     setScanner(false);
     const person = classPeople.find(
@@ -1353,7 +1420,8 @@ function Collect({
       return setNotice("QR Code não localizado nesta lista. Tente novamente ou use o lançamento manual.");
     }
     setScanFailures(0);
-    setFace(person);
+    register(person, "qr");
+    setNotice(`${personLabel(person)}: presença confirmada.`);
   };
   const registerManual = (person, status) => {
     register(person, "manual", status);
@@ -1367,7 +1435,7 @@ function Collect({
       setNotice("A câmera não pôde concluir duas leituras. Continue pelo lançamento manual.");
     }
   };
-  const finish = async () => {
+  const confirmRepresentative = () => {
     if (!representativeRegistration.trim()) {
       setNotice("Informe a matrícula do representante do local para encerrar a aula.");
       return;
@@ -1376,15 +1444,28 @@ function Collect({
       setNotice("Peça ao representante do local para confirmar a realização da aula.");
       return;
     }
+    const registration = representativeRegistration.trim().toLowerCase();
+    const found = data.people.some((x) => x.clientId === clientId && x.active !== false && String(x.registration).trim().toLowerCase() === registration);
+    if (!found) {
+      setNotice("Matrícula não encontrada no cadastro desta empresa. Confira o número ou leia o QR Code do responsável.");
+      return;
+    }
+    setNotice("");
+    setStage("photo");
+  };
+  const finish = async (photo, photoSkipped) => {
+    if (saving) return;
+    setSaving(true);
     const at = new Date().toISOString();
     const id = newid("AULA");
+    const registration = representativeRegistration.trim();
     const certificate = await certificateFor({
       id,
       teacherId: user.id,
       clientId,
       unitId,
       classInfo,
-      representativeRegistration: representativeRegistration.trim(),
+      representativeRegistration: registration,
       representativeConfirmed,
       at,
       location,
@@ -1399,7 +1480,7 @@ function Collect({
         status: "applied",
         at,
         teacherId: user.id,
-        representativeRegistration: representativeRegistration.trim(),
+        representativeRegistration: registration,
         certificate,
       },
     ]);
@@ -1410,11 +1491,39 @@ function Collect({
       teacherName: user.name,
       at,
       location,
-      representativeRegistration: representativeRegistration.trim(),
+      representativeRegistration: registration,
       certificate,
+      photo: photo ? "capturada" : "sem foto",
     }, ...current]);
+    const presencas = classPeople.map((x) => {
+      const mark = classAttendance[x.id];
+      return { personId: x.id, status: mark?.status || "missing", method: mark?.method || null, at: mark?.at || null };
+    });
+    const aula = {
+      id,
+      clientId,
+      unitId,
+      sectorId: classInfo.sectorId,
+      locationId: classInfo.locationId,
+      shift: classInfo.shift,
+      roteiro: classInfo.roteiro,
+      status: "applied",
+      representativeRegistration: registration,
+      representativeMethod,
+      certificate,
+      location,
+      startedAt,
+      at,
+    };
+    let delivered = false;
+    try {
+      delivered = await sendClass(aula, presencas, photo, photoSkipped);
+    } catch {
+      delivered = false;
+    }
+    setSaving(false);
     setStage("saved");
-    setNotice(`Aula registrada. Certificado ${certificate}.`);
+    setNotice(delivered ? `Aula registrada. Certificado ${certificate}.` : `Aula registrada neste aparelho e será enviada quando houver conexão. Certificado ${certificate}.`);
   };
   return (
     <section>
@@ -1601,7 +1710,7 @@ function Collect({
           <p>Antes de fechar a aula, peça ao representante do setor para informar a matrícula. Esse registro gera um certificado de autenticação para a auditoria.</p>
           <label>
             Matrícula do representante
-            <input autoFocus value={representativeRegistration} onChange={(event) => setRepresentativeRegistration(event.target.value)} placeholder="Digite a matrícula" />
+            <input autoFocus value={representativeRegistration} onChange={(event) => { setRepresentativeRegistration(event.target.value); setRepresentativeMethod("matricula"); }} placeholder="Digite a matrícula" />
           </label>
           <button className="secondary" onClick={() => setRepresentativeScanner(true)}><ScanLine size={17}/> Ler QR Code do responsável</button>
           <label className="confirmation-check">
@@ -1610,21 +1719,31 @@ function Collect({
           </label>
           <div>
             <button className="secondary" onClick={() => setStage("collect")}>Voltar à lista</button>
-            <button className="primary" onClick={finish}><Check size={17} /> Confirmar e fechar aula</button>
+            <button className="primary" onClick={confirmRepresentative}><Check size={17} /> Continuar para a foto</button>
           </div>
         </section>
       )}
+      {stage === "photo" && <EvidencePhoto onConfirm={finish} onBack={() => setStage("signature")} saving={saving} />}
       {stage === "saved" && (
         <section className="decision card">
           <h2>Registro concluído.</h2>
-          <p>O status da aula já foi enviado aos indicadores locais.</p>
+          <p>O registro da aula, as presenças e a evidência seguem para o servidor assim que houver conexão.</p>
           <button className="primary" onClick={() => setStage("new")}>
             Abrir nova aula
           </button>
         </section>
       )}
       {scanner && <Scanner onRead={read} onClose={() => { setScanner(false); if (entryMode === "qr" && scanFailures >= 2) setEntryMode("manual"); }} onIssue={reportScannerIssue} onManual={() => { setScanner(false); setEntryMode("manual"); }} />}{" "}
-      {representativeScanner && <Scanner onRead={(value) => { setRepresentativeScanner(false); setRepresentativeRegistration(value.replace(/^SIGEGL:(RESP:)?/i, "")); setRepresentativeConfirmed(true); setNotice("Responsável validado por QR Code."); }} onClose={() => setRepresentativeScanner(false)} onManual={() => setRepresentativeScanner(false)} />}
+      {representativeScanner && <Scanner onRead={(value) => {
+        setRepresentativeScanner(false);
+        const parts = value.replace(/^SIGEGL:(RESP:)?/i, "").split(":");
+        const qrClient = parts.length > 1 ? parts[0] : clientId;
+        if (qrClient !== clientId) return setNotice("Este QR Code pertence a outra empresa.");
+        setRepresentativeRegistration(parts.length > 1 ? parts.slice(1).join(":") : parts[0]);
+        setRepresentativeMethod("qr");
+        setRepresentativeConfirmed(true);
+        setNotice("Responsável lido por QR Code. Conferindo no cadastro ao continuar.");
+      }} onClose={() => setRepresentativeScanner(false)} onManual={() => setRepresentativeScanner(false)} />}
       {face && (
         <Face
           person={face}
@@ -1797,6 +1916,10 @@ export default function App() {
     return () => window.clearTimeout(syncTimer.current);
   }, [data, schedules, classes, attendance, audit, centralReady, token, user, online]);
   useEffect(() => {
+    if (!centralReady || !token || !user || user.role === "client" || !online) return;
+    flushClasses(token, user.id).catch(() => {});
+  }, [centralReady, token, user, online]);
+  useEffect(() => {
     if (!centralReady || !token || user?.role !== "admin") return;
     centralUsers(token)
       .then((remote) => setUsers(remote.users.map(normalizeUser)))
@@ -1921,6 +2044,7 @@ export default function App() {
           <Collect
             data={data}
             user={user}
+            token={token}
             classes={classes}
             setClasses={setClasses}
             attendance={attendance}
