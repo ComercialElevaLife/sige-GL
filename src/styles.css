@@ -80,3 +80,6 @@ body{background:var(--bg);color:var(--ink)}nav{background:var(--deep);box-shadow
   .dv-tr>span[data-label]::before{content:attr(data-label);font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--mut);margin-bottom:2px}
 }
 @media (max-width:480px){.dv-kpi.main{grid-column:1/-1}.dv-kpi{padding:16px}.dv-kpi strong{font-size:30px}}
+
+/* Aviso de conflito de cadastros */
+.sync-alert{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 16px;padding:12px 16px;border-radius:12px;background:#fbecd6;border:1px solid #e7c58f;color:#7a4c12;font-size:14px}
