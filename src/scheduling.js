@@ -26,3 +26,20 @@ export function plannedClassesForMonth(schedules, filters = {}, reference = new 
       return total + count;
     }, 0);
 }
+
+// Aulas previstas entre duas datas [from, to): conta cada dia da semana uma vez e multiplica pelas agendas do recorte.
+export function plannedClassesForRange(schedules, filters = {}, from, to) {
+  const perWeekday = [0, 0, 0, 0, 0, 0, 0];
+  for (let day = new Date(from.getFullYear(), from.getMonth(), from.getDate()); day < to; day = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1)) {
+    perWeekday[day.getDay()] += 1;
+  }
+  return schedules
+    .filter((schedule) =>
+      (!filters.clientId || schedule.clientId === filters.clientId) &&
+      (!filters.unitId || schedule.unitId === filters.unitId) &&
+      (!filters.sectorId || schedule.sectorId === filters.sectorId) &&
+      (!filters.shift || schedule.shift === filters.shift) &&
+      (!filters.locationId || schedule.locationId === filters.locationId),
+    )
+    .reduce((total, schedule) => total + (perWeekday[Number(schedule.weekday)] || 0), 0);
+}
