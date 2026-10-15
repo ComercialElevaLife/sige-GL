@@ -26,7 +26,7 @@ import {
 } from "lucide-react";
 import { verifyFace } from "./biometrics";
 import { queueClass, flushClasses, pendingClasses } from "./classOutbox";
-import { generateDashboardReport } from "./report";
+import { generateExecutiveReport } from "./executiveReport";
 import DashboardView from "./DashboardView";
 import { computeIndicators, currentMonth, monthRange } from "./indicators";
 import { plannedClassesForMonth, weekdays } from "./scheduling";
@@ -509,18 +509,19 @@ function Dashboard({ data, schedules, classes, attendance, user, token }) {
         : null,
     [remote, people, schedules, filter, month, data.clients, data.units, data.sectors],
   );
-  // Relatório em PDF: versão anterior, substituída pelo quadro executivo no próximo ajuste.
+  // Relatório em PDF executivo: mesmos indicadores da tela, sem listas aula a aula nem pessoa a pessoa.
   const downloadPdf = () => {
+    if (!result?.hasData) return window.alert("Não há aulas registradas neste mês para gerar o relatório.");
     try {
-      const related = classes.filter(inScope);
-      generateDashboardReport({
-        data,
-        people,
-        classes: related,
-        attendance,
-        filter,
-        planned: plannedClassesForMonth(schedules, { ...filter, clientId: user.role === "client" ? permittedClientIds[0] : filter.clientId }),
-      });
+      const scopeText = [
+        filter.clientId && nameOf(data.clients, filter.clientId),
+        filter.unitId && nameOf(data.units, filter.unitId),
+        filter.sectorId && nameOf(data.sectors, filter.sectorId),
+        filter.shift,
+        filter.locationId && nameOf(data.locations, filter.locationId),
+      ].filter(Boolean).join(" · ") || "Visão geral";
+      const pdf = generateExecutiveReport({ result, month, scopeText, labels: { sectors: data.sectors } });
+      pdf.save(`relatorio-executivo-gl-${month}.pdf`);
     } catch (failure) {
       window.alert("Não foi possível gerar o PDF. Atualize a página e tente novamente.");
     }
