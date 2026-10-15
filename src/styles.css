@@ -9,3 +9,74 @@ body{background:var(--bg);color:var(--ink)}nav{background:var(--deep);box-shadow
 .login-links{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:16px}.login-links button{background:transparent;color:var(--wine);padding:0;font-size:13px;font-weight:700;text-decoration:underline}.row-edit{background:var(--tint);color:var(--wine);border-radius:7px;width:34px;height:34px;display:grid;place-items:center}.check-list{border:1px solid var(--ln);border-radius:10px;padding:12px;display:grid;gap:9px}.check-list legend{padding:0 5px;color:var(--deep);font-size:14px;font-weight:700}.check-list label{display:flex;align-items:center;gap:9px;font-weight:500!important}.check-list input{width:auto!important;accent-color:var(--wine)}.form-help{color:var(--mut);font-size:12px;line-height:1.45;margin:0}.selection-card{padding:16px;margin:-5px 0 18px}.selection-card label{display:grid;gap:7px;color:var(--deep);font-size:14px;font-weight:700}.selection-card select{font:inherit;border:1px solid var(--ln);border-radius:8px;padding:10px;background:#fff;color:var(--ink)}
 .entry-choice{padding:24px;margin-bottom:18px}.entry-choice h2{font-family:"Montserrat Alternates",sans-serif;color:var(--deep);margin:0 0 8px;font-size:21px}.entry-choice p:not(.eyebrow){color:var(--mut);font-size:14px;margin:0 0 18px}.entry-choice>div{display:flex;gap:10px}.attendance-actions{display:flex;gap:6px}.attendance-actions button{width:34px;height:34px;border-radius:7px;border:1px solid var(--ln);background:white;color:var(--mut);font-weight:800}.attendance-actions .attendance-present.selected{background:#e3f0e9;border-color:var(--ok);color:var(--ok)}.attendance-actions .attendance-absent.selected{background:#fff2d0;border-color:var(--warn);color:#895c10}.attendance-actions .attendance-missing.selected{background:var(--tint);border-color:var(--soft);color:var(--wine)}@media(max-width:760px){.entry-choice>div{flex-direction:column}.entry-choice .primary,.entry-choice .secondary{width:100%}}
 .representative-confirmation{padding:26px;max-width:640px}.representative-confirmation h2{font-family:"Montserrat Alternates",sans-serif;color:var(--deep);margin:0 0 8px}.representative-confirmation p:not(.eyebrow){color:var(--mut);font-size:14px;line-height:1.5;margin:0 0 20px}.representative-confirmation label{display:grid;gap:7px;color:var(--deep);font-size:14px;font-weight:700}.representative-confirmation input{border:1px solid var(--ln);border-radius:8px;padding:12px;font:inherit;color:var(--ink)}.representative-confirmation>div{display:flex;gap:10px;margin-top:18px}.certificate{display:block;width:max-content;max-width:100%;overflow:auto;background:var(--tint);border:1px solid var(--soft);border-radius:6px;padding:5px 7px;color:var(--deep);font-size:11px;margin-top:5px}.confirmation-check{display:flex!important;align-items:center;gap:9px;margin-top:16px;color:var(--deep)!important;font-weight:600!important}.confirmation-check input{width:18px;height:18px;accent-color:var(--wine)}@media(max-width:760px){.representative-confirmation>div{flex-direction:column}.representative-confirmation .primary,.representative-confirmation .secondary{width:100%}}
+
+/* Dashboard de indicadores (PR #9) */
+.dv{display:flex;flex-direction:column;gap:18px;padding-bottom:24px}
+.dv-head{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;padding-top:18px}
+.dv-head h1{font-family:"Montserrat Alternates",sans-serif;font-size:34px;letter-spacing:-.02em;margin:0;color:var(--deep)}
+.dv-head-actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.dv-month{display:flex;align-items:center;gap:4px;background:var(--card);border:1px solid var(--ln);border-radius:12px;padding:4px}
+.dv-month strong{min-width:150px;text-align:center;font-size:14px;color:var(--deep)}
+.dv-month button{background:none;color:var(--wine);width:34px;height:34px;border-radius:8px;display:grid;place-items:center}
+.dv-month button:hover:not(:disabled){background:var(--tint)}
+.dv-month button:disabled{color:var(--soft);cursor:default}
+.dv-note{margin:0;padding:10px 14px;border-radius:10px;background:#fbf1e1;color:#7a4c12;font-size:14px}
+.dv-empty{background:var(--card);border:1px dashed var(--soft);border-radius:16px;padding:40px 24px;text-align:center;color:var(--mut)}
+.dv-empty h2{margin:0 0 8px;color:var(--deep);font-size:20px}
+.dv-empty p{margin:0 auto 14px;max-width:520px}
+.dv-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.dv-kpis.loading{opacity:.55;transition:opacity .2s}
+.dv-kpi{background:var(--card);border:1px solid var(--ln);border-radius:16px;padding:20px;display:flex;flex-direction:column;gap:4px}
+.dv-kpi.main{background:var(--deep);border-color:var(--deep);color:#fff}
+.dv-kpi-label{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--mut)}
+.dv-kpi.main .dv-kpi-label{color:var(--soft)}
+.dv-kpi strong{font-family:"Montserrat Alternates",sans-serif;font-size:42px;line-height:1.1;color:var(--wine)}
+.dv-kpi.main strong{color:#fff}
+.dv-kpi small{color:var(--mut);font-size:13px;line-height:1.35}
+.dv-kpi.main small{color:#e9d3d6}
+.dv-kpi em{font-style:normal;font-size:12px;font-weight:700;margin-top:8px;padding:4px 10px;border-radius:999px;align-self:flex-start}
+.dv-kpi em.ok{background:#dff1e8;color:var(--ok)}
+.dv-kpi em.warn{background:#fbecd6;color:#8a5413}
+.dv-card{background:var(--card);border:1px solid var(--ln);border-radius:16px;padding:22px;display:flex;flex-direction:column;gap:14px}
+.dv-card-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap}
+.dv-card-head h2{margin:0 0 4px;font-size:18px;color:var(--deep)}
+.dv-card-head p{margin:0;font-size:13px;color:var(--mut);max-width:640px}
+.dv-muted{margin:0;font-size:13px;color:var(--mut)}
+.dv-split{display:flex;height:10px;border-radius:999px;overflow:hidden;background:var(--tint)}
+.dv-split.tall{height:22px}
+.dv-split.empty{background:repeating-linear-gradient(45deg,var(--tint),var(--tint) 6px,#f3e8ea 6px,#f3e8ea 12px)}
+.dv-split i{display:block;height:100%}
+.dv-split i.p,.dv-legend i.p{background:var(--ok)}
+.dv-split i.a,.dv-legend i.a{background:var(--warn)}
+.dv-split i.f,.dv-legend i.f{background:var(--bad)}
+.dv-legend{list-style:none;margin:0;padding:0;display:flex;gap:24px;flex-wrap:wrap}
+.dv-legend li{display:flex;align-items:center;gap:8px;font-size:14px}
+.dv-legend i{width:12px;height:12px;border-radius:4px;display:inline-block}
+.dv-legend b{color:var(--deep)}
+.dv-legend small{color:var(--mut)}
+.dv-seg{display:flex;background:var(--bg);border-radius:10px;padding:3px;gap:2px}
+.dv-seg button{background:none;padding:7px 14px;border-radius:8px;font-size:13px;font-weight:600;color:var(--mut)}
+.dv-seg button.on{background:var(--card);color:var(--wine);box-shadow:0 1px 3px rgba(94,42,48,.12)}
+.dv-table{display:flex;flex-direction:column}
+.dv-tr{display:grid;grid-template-columns:minmax(130px,1.3fr) minmax(120px,1.6fr) repeat(4,76px);gap:12px;align-items:center;padding:12px 0;border-top:1px solid var(--ln);font-size:14px}
+.dv-th{border-top:0;padding-top:0;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--mut)}
+.dv-tr>span:not(.dv-bar-col){display:flex;flex-direction:column;line-height:1.2}
+.dv-tr b{color:var(--deep)}
+.dv-tr small{color:var(--mut);font-size:12px}
+.dv-people{display:grid;grid-template-columns:1fr 1fr;gap:10px 28px}
+.dv-people>div{display:grid;grid-template-columns:1fr;gap:6px;padding:10px 0;border-top:1px solid var(--ln);font-size:14px}
+.dv-people span{font-size:13px;color:var(--mut)}
+.dv-people b{color:var(--deep)}
+.dv-people.full{margin-top:12px;max-height:420px;overflow:auto}
+.dv-more summary{cursor:pointer;color:var(--wine);font-weight:600;font-size:14px}
+@media (max-width:900px){.dv-kpis{grid-template-columns:1fr 1fr}.dv-people{grid-template-columns:1fr}}
+@media (max-width:720px){
+  .dv-head h1{font-size:26px}
+  .dv-kpi strong{font-size:34px}
+  .dv-th{display:none}
+  .dv-tr{grid-template-columns:repeat(4,1fr);gap:8px}
+  .dv-tr>strong{grid-column:1/-1}
+  .dv-tr .dv-bar-col{grid-column:1/-1}
+  .dv-tr>span[data-label]::before{content:attr(data-label);font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--mut);margin-bottom:2px}
+}
+@media (max-width:480px){.dv-kpi.main{grid-column:1/-1}.dv-kpi{padding:16px}.dv-kpi strong{font-size:30px}}
