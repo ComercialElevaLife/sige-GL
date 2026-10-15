@@ -224,15 +224,44 @@ async function sendAccessEmail({ to, name, url, subject, intro }) {
   }
 }
 
+let stateStoreReady;
 async function stateStore() {
-  await query(`
-    create table if not exists app_state (
-      id smallint primary key check (id = 1),
-      payload jsonb not null,
-      updated_by uuid references app_user(id),
-      updated_at timestamptz not null default now()
-    )
-  `);
+  stateStoreReady ??= (async () => {
+    await query(`
+      create table if not exists app_state (
+        id smallint primary key check (id = 1),
+        payload jsonb not null,
+        updated_by uuid references app_user(id),
+        updated_at timestamptz not null default now()
+      )
+    `);
+    // Versão dos cadastros: sobe só quando o administrador grava. Gravação de professor não altera.
+    await query("alter table app_state add column if not exists registry_version integer not null default 0");
+  })().catch((error) => {
+    stateStoreReady = undefined;
+    throw error;
+  });
+  await stateStoreReady;
+}
+
+// Chave de matrícula por empresa, sem diferença de caixa nem espaços nas pontas.
+const registrationKey = (person) => `${person?.clientId}|${String(person?.registration ?? "").trim().toLowerCase()}`;
+function registrationCounts(state) {
+  const counts = new Map();
+  for (const person of state?.data?.people || []) {
+    if (!String(person?.registration ?? "").trim()) continue;
+    const key = registrationKey(person);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return counts;
+}
+// Matrícula repetida na mesma empresa que não existia antes desta gravação. Duplicidades antigas não bloqueiam.
+function newDuplicateRegistration(stored, incoming) {
+  const before = registrationCounts(stored);
+  for (const [key, count] of registrationCounts(incoming)) {
+    if (count > 1 && count > (before.get(key) || 1)) return key.split("|")[1];
+  }
+  return null;
 }
 
 // Migração única de client_ids para text[]: só altera a tabela se o tipo ainda não for lista de textos.
@@ -601,9 +630,9 @@ app.http("bootstrap", {
       const { session } = await request.json();
       const user = await userFrom(request, session);
       await stateStore();
-      const snapshot = await query("select payload from app_state where id = 1");
+      const snapshot = await query("select payload, registry_version from app_state where id = 1");
       if (snapshot.rows[0]) {
-        return json({ user, initialized: true, data: scopedSnapshot(snapshot.rows[0].payload, user) });
+        return json({ user, initialized: true, registryVersion: snapshot.rows[0].registry_version, data: scopedSnapshot(snapshot.rows[0].payload, user) });
       }
       const values = user.role === "admin" ? [] : [user.clientIds];
       const clause = user.role === "admin" ? "" : " where client_id::text = any($1::text[])";
@@ -637,24 +666,46 @@ app.http("sync", {
   route: "sync",
   handler: async (request) => {
     try {
-      const { state, session } = await request.json();
+      const { state, session, baseVersion } = await request.json();
       const user = await userFrom(request, session);
       if (user.role === "client") return json({ error: "Usuário cliente possui acesso somente de visualização." }, 403);
       if (!state || typeof state !== "object") return json({ error: "Estado de sincronização inválido." }, 400);
       await stateStore();
-      let nextState = state;
+      const stored = await query("select payload, registry_version from app_state where id = 1");
       if (user.role === "professor") {
-        const stored = await query("select payload from app_state where id = 1");
         if (!stored.rows[0]) return json({ error: "A base mestre ainda não foi inicializada por um administrador." }, 409);
-        nextState = mergeProfessorSnapshot(stored.rows[0].payload, scopedSnapshot(state, user), user);
+        const merged = mergeProfessorSnapshot(stored.rows[0].payload, scopedSnapshot(state, user), user);
+        await query("update app_state set payload = $1::jsonb, updated_by = $2, updated_at = now() where id = 1", [JSON.stringify(merged), user.id]);
+        return json({ synchronizedAt: new Date().toISOString(), registryVersion: stored.rows[0].registry_version }, 202);
       }
-      await query(
-        `insert into app_state (id, payload, updated_by, updated_at)
-         values (1, $1::jsonb, $2, now())
-         on conflict (id) do update set payload = excluded.payload, updated_by = excluded.updated_by, updated_at = now()`,
-        [JSON.stringify(nextState), user.id],
+      // Administrador: só grava se partiu da versão atual dos cadastros; senão alguém gravou antes e o app precisa recarregar.
+      const conflict = (version) => json({
+        error: "Os cadastros foram alterados por outra pessoa. Recarregue para ver a versão atual antes de editar de novo.",
+        conflict: true,
+        registryVersion: version,
+      }, 409);
+      const current = stored.rows[0];
+      if (current) {
+        if (!Number.isInteger(baseVersion) || baseVersion !== current.registry_version) return conflict(current.registry_version);
+        const duplicate = newDuplicateRegistration(current.payload, state);
+        if (duplicate) return json({ error: `Matrícula ${duplicate} repetida na mesma empresa. Corrija o cadastro antes de gravar.` }, 422);
+        const saved = await query(
+          `update app_state set payload = $1::jsonb, updated_by = $2, updated_at = now(), registry_version = registry_version + 1
+           where id = 1 and registry_version = $3 returning registry_version`,
+          [JSON.stringify(state), user.id, baseVersion],
+        );
+        if (!saved.rows[0]) return conflict((await query("select registry_version from app_state where id = 1")).rows[0]?.registry_version);
+        return json({ synchronizedAt: new Date().toISOString(), registryVersion: saved.rows[0].registry_version }, 202);
+      }
+      const duplicate = newDuplicateRegistration(null, state);
+      if (duplicate) return json({ error: `Matrícula ${duplicate} repetida na mesma empresa. Corrija o cadastro antes de gravar.` }, 422);
+      const created = await query(
+        `insert into app_state (id, payload, updated_by, updated_at, registry_version)
+         values (1, $1::jsonb, $2, now(), 1) on conflict (id) do nothing returning registry_version`,
+        [JSON.stringify(state), user.id],
       );
-      return json({ synchronizedAt: new Date().toISOString() }, 202);
+      if (!created.rows[0]) return conflict((await query("select registry_version from app_state where id = 1")).rows[0]?.registry_version);
+      return json({ synchronizedAt: new Date().toISOString(), registryVersion: created.rows[0].registry_version }, 202);
     } catch (error) {
       return configurationError(error);
     }
