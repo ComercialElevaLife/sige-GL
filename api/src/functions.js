@@ -996,6 +996,7 @@ app.http("classList", {
       return json({
         aulas: aulas.rows.map((r) => ({ id: r.id, clientId: r.client_id, unitId: r.unit_id, sectorId: r.sector_id, locationId: r.location_id, shift: r.shift, status: r.status, closedAt: r.closed_at, photoStatus: r.photo_status })),
         presencas: presences.rows.map((r) => ({ aulaId: r.aula_id, personId: r.person_id, status: r.status })),
+        truncated: aulas.rows.length >= 5000,
       });
     } catch (error) {
       return configurationError(error);
