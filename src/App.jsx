@@ -27,6 +27,7 @@ import {
 import { verifyFace } from "./biometrics";
 import { queueClass, flushClasses, pendingClasses } from "./classOutbox";
 import { generateExecutiveReport } from "./executiveReport";
+import { checkPersonRow, findRegistrationOwner, registrationKey } from "./registry";
 import DashboardView from "./DashboardView";
 import { computeIndicators, currentMonth, monthRange } from "./indicators";
 import { plannedClassesForMonth, weekdays } from "./scheduling";
@@ -571,6 +572,7 @@ function ExcelImport({ data, setData, setUsers, token, centralReady }) {
     const file = event.target.files?.[0]; if (!file) return;
     const book = XLSX.read(await file.arrayBuffer(), { type: "array" });
     const rows = XLSX.utils.sheet_to_json(book.Sheets[book.SheetNames[0]], { defval: "" });
+    const seen = new Map();
     const checked = rows.map((row, index) => {
       const company = data.clients.find((item) => normalize(item.name) === normalize(cell(row, "Empresa")));
       const unit = data.units.find((item) => item.clientId === company?.id && normalize(item.name) === normalize(cell(row, "Unidade")));
@@ -579,7 +581,15 @@ function ExcelImport({ data, setData, setUsers, token, centralReady }) {
       let error = "";
       if (type === "clients" && !cell(row, "Empresa")) error = "Empresa é obrigatória.";
       if (type === "locations" && (!company || !unit || !cell(row, "Local da aula"))) error = "Empresa, unidade ou local não localizado.";
-      if (type === "people" && (!cell(row, "Matrícula ou CPF") || !company || !unit || !sector || !location || !cell(row, "Turno"))) error = "Confira matrícula/CPF, empresa, unidade, setor, local e turno.";
+      if (type === "people") {
+        const text = (name) => String(cell(row, name)).trim();
+        error = checkPersonRow({
+          registration: text("Matrícula ou CPF"),
+          turn: text("Turno"),
+          names: { company: text("Empresa"), unit: text("Unidade"), sector: text("Setor"), location: text("Local da aula") },
+          company, unit, sector, location, people: data.people, seen, line: index + 2,
+        });
+      }
       if (type === "professors" && (!cell(row, "Nome") || !cell(row, "E-mail") || !cell(row, "Empresas"))) error = "Nome, e-mail e empresas são obrigatórios.";
       return { row, index: index + 2, error, company, unit, sector, location };
     });
@@ -620,6 +630,7 @@ function Registry({ kind, data, setData }) {
   const [open, setOpen] = useState(false),
     [editingId, setEditingId] = useState(null),
     [qrPerson, setQrPerson] = useState(null),
+    [formError, setFormError] = useState(""),
     [form, setForm] = useState({
       name: "",
       registration: "",
@@ -647,15 +658,25 @@ function Registry({ kind, data, setData }) {
   const openCreate = () => {
     setEditingId(null);
     setForm(blank());
+    setFormError("");
     setOpen(true);
   };
   const openEdit = (item) => {
     setEditingId(item.id);
     setForm({ ...blank(), ...item });
+    setFormError("");
     setOpen(true);
   };
   const create = (e) => {
     e.preventDefault();
+    if (kind === "people") {
+      // Matrícula repetida na mesma empresa gera QR Code igual para pessoas diferentes.
+      const original = editingId && data.people.find((person) => person.id === editingId);
+      const unchanged = original && registrationKey(form.clientId, form.registration) === registrationKey(original.clientId, original.registration);
+      const owner = !unchanged && findRegistrationOwner(data.people, form.clientId, form.registration, editingId);
+      if (owner) return setFormError(`A matrícula ${form.registration.trim()} já pertence a ${personLabel(owner)} nesta empresa.`);
+    }
+    setFormError("");
     let item = { id: editingId || newid(kind.slice(0, 2).toUpperCase()), name: form.name };
     if (kind === "units" || kind === "people") item.clientId = form.clientId;
     if (kind === "sectors" || kind === "locations" || kind === "people")
@@ -844,6 +865,7 @@ function Registry({ kind, data, setData }) {
                 </label>
               </>
             )}
+            {formError && <p className="error">{formError}</p>}
             <button className="primary full">{editingId ? "Salvar alterações" : "Salvar"}</button>
           </form>
         </Modal>
@@ -1667,11 +1689,14 @@ export default function App() {
     [loginNotice, setLoginNotice] = useState(""),
     [centralReady, setCentralReady] = useState(false),
     [syncStatus, setSyncStatus] = useState("local"),
+    [syncNotice, setSyncNotice] = useState(""),
     [page, setPage] = useState("dashboard"),
     [kind, setKind] = useState("clients"),
     [online, setOnline] = useState(() => navigator.onLine);
   const restoreStarted = useRef(false);
   const syncTimer = useRef();
+  const registryVersion = useRef(0);
+  const syncBlocked = useRef(false);
 
   const snapshot = () => ({ data, schedules, classes, attendance, audit });
   const applySnapshot = (remote) => {
@@ -1721,7 +1746,10 @@ export default function App() {
     restoreStarted.current = true;
     centralBootstrap(token)
       .then((remote) => {
-        if (remote.initialized) applySnapshot(remote.data);
+        if (remote.initialized) {
+          applySnapshot(remote.data);
+          registryVersion.current = remote.registryVersion ?? 0;
+        }
         setCentralReady(true);
         setSyncStatus(remote.initialized ? "sincronizado" : "pendente");
       })
@@ -1744,11 +1772,23 @@ export default function App() {
     if (!centralReady || !token || user?.role === "client" || !online) return;
     window.clearTimeout(syncTimer.current);
     syncTimer.current = window.setTimeout(async () => {
+      // Cadastros desatualizados: nada é enviado até o administrador recarregar a versão atual.
+      if (syncBlocked.current) return;
       try {
-        await centralSync(token, snapshot());
+        const response = await centralSync(token, snapshot(), registryVersion.current);
+        if (response.registryVersion != null) registryVersion.current = response.registryVersion;
         localStorage.removeItem(K.outbox);
+        setSyncNotice("");
         setSyncStatus("sincronizado");
-      } catch {
+      } catch (failure) {
+        if (failure.conflict) {
+          syncBlocked.current = true;
+          setSyncNotice(failure.message);
+          setSyncStatus("conflito");
+          return;
+        }
+        // Dado recusado pelo servidor (ex.: matrícula repetida): mostra o motivo em vez de só "pendente".
+        if (failure.status === 422) setSyncNotice(failure.message);
         write(K.outbox, snapshot());
         setSyncStatus("pendente");
       }
@@ -1765,16 +1805,34 @@ export default function App() {
       .then((remote) => setUsers(remote.users.map(normalizeUser)))
       .catch(() => {});
   }, [centralReady, token, user?.role]);
+  const reloadRegistry = async () => {
+    try {
+      const remote = await centralBootstrap(token);
+      if (remote.initialized) {
+        applySnapshot(remote.data);
+        registryVersion.current = remote.registryVersion ?? 0;
+      }
+      syncBlocked.current = false;
+      setSyncNotice("");
+      setSyncStatus("sincronizado");
+    } catch {
+      setSyncNotice("Não foi possível recarregar agora. Verifique a internet e tente de novo.");
+    }
+  };
   const startCentralSession = async (email, password) => {
     const session = await centralLogin(email, password);
     const centralUser = normalizeUser(session.user);
     write(K.token, session.token);
     setToken(session.token);
     const remote = await centralBootstrap(session.token);
+    syncBlocked.current = false;
+    setSyncNotice("");
+    registryVersion.current = remote.initialized ? remote.registryVersion ?? 0 : 0;
     if (remote.initialized) applySnapshot(remote.data);
     else if (centralUser.role === "admin") {
       try {
-        await centralSync(session.token, snapshot());
+        const response = await centralSync(session.token, snapshot(), registryVersion.current);
+        if (response.registryVersion != null) registryVersion.current = response.registryVersion;
         localStorage.removeItem(K.outbox);
       } catch {
         write(K.outbox, snapshot());
@@ -1841,7 +1899,7 @@ export default function App() {
         <div className="user-nav">
           <span className="offline">
             <span />
-            {!online ? "Sem internet · dados protegidos" : centralReady ? syncStatus === "sincronizado" ? "Dados sincronizados" : "Sincronização pendente" : "Dados neste dispositivo"}
+            {!online ? "Sem internet · dados protegidos" : centralReady ? syncStatus === "sincronizado" ? "Dados sincronizados" : syncStatus === "conflito" ? "Cadastros desatualizados" : "Sincronização pendente" : "Dados neste dispositivo"}
           </span>
           <span className="teacher-name">
             {user.name} · {roles[user.role]}
@@ -1859,6 +1917,15 @@ export default function App() {
         </div>
       </nav>
       <div className="container">
+        {syncNotice && (
+          <div className="sync-alert" role="alert">
+            <span>
+              {syncNotice}
+              {syncStatus === "conflito" && " Suas últimas alterações não foram salvas."}
+            </span>
+            {syncStatus === "conflito" && <button className="secondary compact" onClick={reloadRegistry}>Recarregar cadastros</button>}
+          </div>
+        )}
         {nav.length > 1 && <div className="app-tabs">
           {nav.map(([v, I, l]) => (
             <button
