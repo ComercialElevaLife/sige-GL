@@ -2,7 +2,7 @@ import { app } from "@azure/functions";
 import { EmailClient } from "@azure/communication-email";
 import bcrypt from "bcryptjs";
 import { createHash, randomBytes } from "node:crypto";
-import { query } from "./db.js";
+import { query, database } from "./db.js";
 
 let userSchemaReady;
 let sessionStoreReady;
@@ -655,6 +655,201 @@ app.http("sync", {
         [JSON.stringify(nextState), user.id],
       );
       return json({ synchronizedAt: new Date().toISOString() }, 202);
+    } catch (error) {
+      return configurationError(error);
+    }
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Aula, presença por aula e foto de evidência (um registro por documento).
+// Tabelas novas e aditivas: não alteram app_state nem as tabelas existentes.
+// A foto é só evidência de auditoria: não há comparação nem reconhecimento facial.
+// ---------------------------------------------------------------------------
+let aulaStoreReady;
+async function aulaStore() {
+  aulaStoreReady ??= (async () => {
+    await query(`
+      create table if not exists aula (
+        id text primary key,
+        client_id text not null,
+        unit_id text,
+        sector_id text,
+        location_id text,
+        shift text,
+        roteiro text,
+        status text not null check (status in ('applied', 'cancelled')),
+        cancelled_by text,
+        cancellation_reason text,
+        teacher_id uuid references app_user(id) on delete set null,
+        representative_registration text,
+        representative_person_id text,
+        representative_name text,
+        representative_method text check (representative_method in ('qr', 'matricula')),
+        certificate text,
+        latitude numeric(10, 6),
+        longitude numeric(10, 6),
+        accuracy numeric(10, 2),
+        started_at timestamptz,
+        device_closed_at timestamptz,
+        closed_at timestamptz not null default now(),
+        photo_status text not null default 'none' check (photo_status in ('captured', 'skipped', 'none'))
+      )`);
+    await query(`create index if not exists aula_client_closed_idx on aula (client_id, closed_at)`);
+    await query(`
+      create table if not exists presenca (
+        aula_id text not null references aula(id) on delete cascade,
+        person_id text not null,
+        status text not null check (status in ('present', 'absent', 'missing')),
+        method text,
+        recorded_at timestamptz,
+        primary key (aula_id, person_id)
+      )`);
+    await query(`
+      create table if not exists evidencia_foto (
+        aula_id text primary key references aula(id) on delete cascade,
+        image bytea not null,
+        mime text not null default 'image/jpeg',
+        bytes integer not null,
+        created_at timestamptz not null default now(),
+        discard_at timestamptz not null
+      )`);
+  })();
+  try {
+    await aulaStoreReady;
+  } catch (error) {
+    aulaStoreReady = undefined;
+    throw error;
+  }
+}
+
+const PHOTO_MAX_BYTES = 400 * 1024;
+const photoRetentionDays = () => Math.max(1, Number(process.env.FOTO_RETENCAO_DIAS) || 90);
+const cleanText = (value, max = 120) => (value == null ? null : String(value).trim().slice(0, max) || null);
+const cleanNumber = (value) => (Number.isFinite(Number(value)) && value !== "" && value != null ? Number(value) : null);
+const cleanDate = (value) => {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+};
+
+app.http("saveClass", {
+  methods: ["POST"],
+  authLevel: "anonymous",
+  route: "aulas",
+  handler: async (request) => {
+    try {
+      const body = await request.json();
+      const user = await userFrom(request, body.session);
+      if (user.role === "client") throw new HttpError(403, "Usuário cliente possui acesso somente de visualização.");
+      const a = body.aula || {};
+      const id = String(a.id || "");
+      if (!/^AULA-[A-Za-z0-9-]{4,60}$/.test(id)) throw new HttpError(400, "Identificador da aula inválido.");
+      const clientId = cleanText(a.clientId, 64);
+      if (!clientId) throw new HttpError(400, "Empresa da aula não informada.");
+      if (user.role === "professor" && !user.clientIds.includes(clientId)) throw new HttpError(403, "Empresa fora do seu escopo.");
+      const status = a.status === "cancelled" ? "cancelled" : "applied";
+      await aulaStore();
+
+      // Reenvio da fila offline: a aula já gravada não é duplicada.
+      const existing = await query("select id, closed_at from aula where id = $1", [id]);
+      if (existing.rows[0]) return json({ id, duplicate: true, closedAt: existing.rows[0].closed_at });
+
+      // Fechamento conferido: a matrícula do representante precisa existir no cadastro da empresa.
+      let representative = { person_id: null, name: null };
+      if (status === "applied") {
+        const registration = cleanText(a.representativeRegistration, 64);
+        if (!registration) throw new HttpError(400, "Informe a matrícula do representante do local.");
+        const found = await query(
+          `select p->>'id' as person_id, p->>'name' as name
+           from app_state s, jsonb_array_elements(coalesce(s.payload->'data'->'people', '[]'::jsonb)) p
+           where s.id = 1 and p->>'clientId' = $1
+             and lower(btrim(p->>'registration')) = lower(btrim($2))
+             and coalesce(p->>'active', 'true') <> 'false'
+           limit 1`,
+          [clientId, registration],
+        );
+        if (!found.rows[0]) throw new HttpError(422, "Matrícula do representante não encontrada no cadastro desta empresa.");
+        representative = found.rows[0];
+      }
+
+      let photo = null;
+      if (body.photo) {
+        const match = /^data:image\/jpeg;base64,([A-Za-z0-9+/=]+)$/.exec(String(body.photo));
+        if (!match) throw new HttpError(400, "Foto inválida. Envie uma imagem JPEG.");
+        photo = Buffer.from(match[1], "base64");
+        if (!photo.length || photo.length > PHOTO_MAX_BYTES) throw new HttpError(413, "Foto grande demais.");
+      }
+
+      const presences = (Array.isArray(body.presencas) ? body.presencas : []).slice(0, 1000);
+      const valid = new Set(["present", "absent", "missing"]);
+      const rows = presences.filter((item) => item?.personId && valid.has(item.status));
+
+      const client = await database().connect();
+      try {
+        await client.query("begin");
+        await client.query(
+          `insert into aula (id, client_id, unit_id, sector_id, location_id, shift, roteiro, status, cancelled_by, cancellation_reason,
+             teacher_id, representative_registration, representative_person_id, representative_name, representative_method, certificate,
+             latitude, longitude, accuracy, started_at, device_closed_at, photo_status)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
+          [
+            id, clientId, cleanText(a.unitId, 64), cleanText(a.sectorId, 64), cleanText(a.locationId, 64), cleanText(a.shift, 60), cleanText(a.roteiro, 120),
+            status, cleanText(a.cancelledBy, 20), cleanText(a.reason, 200),
+            user.id, cleanText(a.representativeRegistration, 64), representative.person_id, representative.name,
+            a.representativeMethod === "qr" ? "qr" : status === "applied" ? "matricula" : null, cleanText(a.certificate, 64),
+            cleanNumber(a.location?.latitude), cleanNumber(a.location?.longitude), cleanNumber(a.location?.accuracy),
+            cleanDate(a.startedAt), cleanDate(a.at), photo ? "captured" : status === "applied" && body.photoSkipped ? "skipped" : "none",
+          ],
+        );
+        if (rows.length) {
+          await client.query(
+            `insert into presenca (aula_id, person_id, status, method, recorded_at)
+             select $1::text, * from unnest($2::text[], $3::text[], $4::text[], $5::timestamptz[])`,
+            [id, rows.map((r) => String(r.personId).slice(0, 64)), rows.map((r) => r.status), rows.map((r) => cleanText(r.method, 20)), rows.map((r) => cleanDate(r.at))],
+          );
+        }
+        if (photo) {
+          await client.query(
+            `insert into evidencia_foto (aula_id, image, bytes, discard_at) values ($1, $2, $3, now() + make_interval(days => $4::int))`,
+            [id, photo, photo.length, photoRetentionDays()],
+          );
+        }
+        await client.query("commit");
+      } catch (error) {
+        await client.query("rollback").catch(() => {});
+        throw error;
+      } finally {
+        client.release();
+      }
+      // O Static Web Apps só executa funções HTTP: o descarte das fotos vencidas roda a cada gravação.
+      await query("delete from evidencia_foto where discard_at < now()").catch(() => {});
+      const saved = await query("select closed_at from aula where id = $1", [id]);
+      return json({ id, closedAt: saved.rows[0]?.closed_at, representativeName: representative.name }, 201);
+    } catch (error) {
+      return configurationError(error);
+    }
+  },
+});
+
+app.http("classPhoto", {
+  methods: ["POST"],
+  authLevel: "anonymous",
+  route: "aulas-foto",
+  handler: async (request) => {
+    try {
+      const body = await request.json();
+      const user = await userFrom(request, body.session);
+      await aulaStore();
+      const result = await query(
+        `select a.client_id, f.image, f.mime, f.created_at, f.discard_at
+         from evidencia_foto f join aula a on a.id = f.aula_id
+         where f.aula_id = $1 and f.discard_at > now()`,
+        [String(body.id || "")],
+      );
+      const row = result.rows[0];
+      if (!row) throw new HttpError(404, "Foto não encontrada ou já descartada.");
+      if (user.role !== "admin" && !user.clientIds.includes(row.client_id)) throw new HttpError(403, "Empresa fora do seu escopo.");
+      return json({ image: `data:${row.mime};base64,${row.image.toString("base64")}`, capturedAt: row.created_at, discardAt: row.discard_at });
     } catch (error) {
       return configurationError(error);
     }
