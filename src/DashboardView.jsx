@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { ChevronLeft, ChevronRight, FileText, RefreshCw } from "lucide-react";
-import { GOALS, monthLabel } from "./indicators";
+import { GOALS } from "./indicators";
+import { PERIOD_TYPES, canShift, changePeriodType, shiftPeriod, toIso } from "./periods";
+import { ClassesChart, RankingBars, TrendChart } from "./charts";
 
 const fmt = (value) => `${Math.round(value)}%`;
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
@@ -37,20 +39,14 @@ function Kpi({ label, value, detail, goal, reached, tone }) {
   );
 }
 
-function Breakdown({ groups }) {
-  const [field, setField] = useState("sectorId");
+function Breakdown({ groups, field }) {
   const rows = groups[field] || [];
   return (
     <section className="dv-card">
       <div className="dv-card-head">
         <div>
-          <h2>Detalhamento por recorte</h2>
-          <p>Percentuais sobre as vagas das aulas aplicadas; adesão sobre a lista de colaboradores.</p>
-        </div>
-        <div className="dv-seg" role="tablist" aria-label="Agrupar por">
-          {BREAKDOWNS.map(([key, label]) => (
-            <button key={key} role="tab" aria-selected={field === key} className={field === key ? "on" : ""} onClick={() => setField(key)}>{label}</button>
-          ))}
+          <h2>Detalhamento por {BREAKDOWNS.find(([key]) => key === field)[1].toLowerCase()}</h2>
+          <p>Percentuais sobre as vagas das aulas aplicadas; adesão sobre a lista de colaboradores. Troque o recorte nas abas do gráfico de ranking.</p>
         </div>
       </div>
       {rows.length === 0 ? (
@@ -121,14 +117,40 @@ function Collaborators({ rows }) {
   );
 }
 
-export default function DashboardView({ result, month, onMonth, loading, error, onRetry, pending, onPdf, filters, canNext }) {
-  const shift = (delta) => {
-    const [year, number] = month.split("-").map(Number);
-    const next = new Date(year, number - 1 + delta, 1);
-    onMonth(`${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}`);
-  };
-  const t = result?.totals;
-  const c = result?.classes;
+// Seletor de período: tipo (Ano, Mês, Trimestre, Semestre, Personalizado) + navegação ou datas.
+function PeriodPicker({ period, onPeriod, range }) {
+  const today = toIso(new Date());
+  const custom = period.type === "custom";
+  const setDate = (field) => (event) => onPeriod({ ...period, [field]: event.target.value });
+  return (
+    <div className="dv-period">
+      <div className="dv-seg" role="tablist" aria-label="Tipo de período">
+        {PERIOD_TYPES.map(([key, label]) => (
+          <button key={key} role="tab" aria-selected={period.type === key} className={period.type === key ? "on" : ""} onClick={() => onPeriod(changePeriodType(period, key))}>{label}</button>
+        ))}
+      </div>
+      {custom ? (
+        <div className="dv-dates">
+          <label>De <input type="date" value={period.start} max={today} onChange={setDate("start")} /></label>
+          <label>Até <input type="date" value={period.end} max={today} onChange={setDate("end")} /></label>
+        </div>
+      ) : (
+        <div className="dv-month">
+          <button aria-label="Período anterior" onClick={() => onPeriod(shiftPeriod(period, -1))}><ChevronLeft size={18} /></button>
+          <strong>{range.label}</strong>
+          <button aria-label="Próximo período" onClick={() => onPeriod(shiftPeriod(period, 1))} disabled={!canShift(period, 1)}><ChevronRight size={18} /></button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function DashboardView({ result, period, onPeriod, range, ready, loading, error, onRetry, pending, onPdf, filters, truncated }) {
+  const [field, setField] = useState("sectorId");
+  const t = result.totals;
+  const c = result.classes;
+  const data = ready && result.hasData;
+  const dash = "—";
   return (
     <section className="dv">
       <header className="dv-head">
@@ -137,54 +159,94 @@ export default function DashboardView({ result, month, onMonth, loading, error, 
           <h1>Ginástica Laboral</h1>
         </div>
         <div className="dv-head-actions">
-          <div className="dv-month">
-            <button aria-label="Mês anterior" onClick={() => shift(-1)}><ChevronLeft size={18} /></button>
-            <strong>{monthLabel(month)}</strong>
-            <button aria-label="Próximo mês" onClick={() => shift(1)} disabled={!canNext}><ChevronRight size={18} /></button>
-          </div>
           <button className="primary" onClick={onPdf}><FileText size={18} /> Relatório em PDF</button>
         </div>
       </header>
+      <PeriodPicker period={period} onPeriod={onPeriod} range={range} />
       {filters}
       {pending > 0 && <p className="dv-note">{plural(pending, "aula aguarda", "aulas aguardam")} envio deste aparelho e ainda não {pending === 1 ? "entrou" : "entraram"} nos indicadores.</p>}
+      {truncated && <p className="dv-note">O período tem muitas aulas e a lista foi cortada em 5.000. Escolha um período menor para ver os números completos.</p>}
+      {range.error && <p className="dv-note">{range.error}</p>}
       {error ? (
         <div className="dv-empty">
           <h2>Não foi possível carregar os indicadores</h2>
           <p>{error}</p>
           <button className="secondary" onClick={onRetry}><RefreshCw size={16} /> Tentar de novo</button>
         </div>
-      ) : loading && !result ? (
-        <div className="dv-empty"><p>Carregando indicadores…</p></div>
-      ) : !result?.hasData ? (
-        <div className="dv-empty">
-          <h2>Nenhuma aula registrada em {monthLabel(month)}</h2>
-          <p>Os indicadores aparecem assim que as aulas do período forem fechadas. Aulas anteriores à versão com registro por aula não entram neste cálculo.</p>
-        </div>
       ) : (
         <>
+          {!range.error && loading && !ready && <p className="dv-note info">Carregando os indicadores de {range.label}…</p>}
+          {!range.error && ready && !result.hasData && (
+            <p className="dv-note info">Nenhuma aula registrada em {range.label}. Os gráficos se preenchem quando as aulas do período forem fechadas.</p>
+          )}
           <div className={`dv-kpis ${loading ? "loading" : ""}`}>
-            <Kpi label="Adesão" value={fmt(t.adherenceRate)} detail={`${t.adhered} de ${t.people} colaboradores com ao menos 1 presença`} goal={GOALS.adherence} reached={t.adherenceRate >= GOALS.adherence} tone="main" />
-            <Kpi label="Presença" value={fmt(t.presentRate)} detail={`${t.present} de ${t.slots} vagas das aulas aplicadas`} />
-            <Kpi label="Aulas aplicadas" value={fmt(c.appliedRate)} detail={`${c.applied} de ${c.planned} previstas`} goal={GOALS.applied} reached={c.appliedRate >= GOALS.applied} />
-            <Kpi label="Cancelamentos" value={c.cancelled} detail={`${fmt(c.cancelledRate)} das aulas previstas`} />
+            <Kpi label="Adesão" value={data ? fmt(t.adherenceRate) : dash} detail={data ? `${t.adhered} de ${t.people} colaboradores com ao menos 1 presença` : `${t.people} colaboradores na lista`} goal={data ? GOALS.adherence : null} reached={t.adherenceRate >= GOALS.adherence} tone="main" />
+            <Kpi label="Presença" value={data ? fmt(t.presentRate) : dash} detail={data ? `${t.present} de ${t.slots} vagas das aulas aplicadas` : "Sem aulas aplicadas"} />
+            <Kpi label="Aulas aplicadas" value={ready ? fmt(c.appliedRate) : dash} detail={`${c.applied} de ${c.planned} previstas`} goal={ready ? GOALS.applied : null} reached={c.appliedRate >= GOALS.applied} />
+            <Kpi label="Cancelamentos" value={ready ? c.cancelled : dash} detail={ready ? `${fmt(c.cancelledRate)} das aulas previstas` : "—"} />
           </div>
-          <section className="dv-card">
-            <div className="dv-card-head">
-              <div>
-                <h2>Como foram as vagas das aulas</h2>
-                <p>{t.slots} vagas em {plural(c.applied, "aula aplicada", "aulas aplicadas")}.</p>
+          <div className={`dv-grid2 ${loading ? "loading" : ""}`}>
+            <section className="dv-card">
+              <div className="dv-card-head">
+                <div>
+                  <h2>Evolução da presença e da adesão</h2>
+                  <p>Cada ponto é um dia, semana ou mês, conforme o período. Passe o mouse nos pontos para ver os números.</p>
+                </div>
               </div>
-            </div>
-            <SplitBar row={t} tall />
-            <ul className="dv-legend">
-              <li><i className="p" /> Presença <b>{fmt(t.presentRate)}</b><small>{t.present}</small></li>
-              <li><i className="a" /> Ausência <b>{fmt(t.absentRate)}</b><small>{t.absent}</small></li>
-              <li><i className="f" /> Falta <b>{fmt(t.missingRate)}</b><small>{t.missing}</small></li>
-            </ul>
-            <p className="dv-muted">Ausência: o colaborador foi marcado como ausente na aula. Falta: não foi marcado nem como presente nem como ausente.</p>
-          </section>
-          <Breakdown groups={result.groups} />
-          <Collaborators rows={result.collaborators} />
+              <TrendChart series={result.series} />
+              <ul className="dv-legend">
+                <li><i className="lp" /> Presença</li>
+                <li><i className="la" /> Adesão</li>
+                <li><i className="lg" /> Meta de adesão</li>
+              </ul>
+            </section>
+            <section className="dv-card">
+              <div className="dv-card-head">
+                <div>
+                  <h2>Aulas previstas × aplicadas</h2>
+                  <p>Previstas pela agenda (só até hoje) e aplicadas, fechadas no período.</p>
+                </div>
+              </div>
+              <ClassesChart series={result.series} />
+              <ul className="dv-legend">
+                <li><i className="bp" /> Previstas</li>
+                <li><i className="bd" /> Aplicadas</li>
+              </ul>
+            </section>
+          </div>
+          <div className={`dv-grid2 ${loading ? "loading" : ""}`}>
+            <section className="dv-card">
+              <div className="dv-card-head">
+                <div>
+                  <h2>Como foram as vagas das aulas</h2>
+                  <p>{t.slots} vagas em {plural(c.applied, "aula aplicada", "aulas aplicadas")}.</p>
+                </div>
+              </div>
+              <SplitBar row={t} tall />
+              <ul className="dv-legend">
+                <li><i className="p" /> Presença <b>{data ? fmt(t.presentRate) : dash}</b><small>{t.present}</small></li>
+                <li><i className="a" /> Ausência <b>{data ? fmt(t.absentRate) : dash}</b><small>{t.absent}</small></li>
+                <li><i className="f" /> Falta <b>{data ? fmt(t.missingRate) : dash}</b><small>{t.missing}</small></li>
+              </ul>
+              <p className="dv-muted">Ausência: o colaborador foi marcado como ausente na aula. Falta: não foi marcado nem como presente nem como ausente.</p>
+            </section>
+            <section className="dv-card">
+              <div className="dv-card-head">
+                <div>
+                  <h2>Presença por recorte</h2>
+                  <p>As 8 maiores presenças, sobre as vagas das aulas aplicadas.</p>
+                </div>
+                <div className="dv-seg" role="tablist" aria-label="Agrupar por">
+                  {BREAKDOWNS.map(([key, label]) => (
+                    <button key={key} role="tab" aria-selected={field === key} className={field === key ? "on" : ""} onClick={() => setField(key)}>{label}</button>
+                  ))}
+                </div>
+              </div>
+              <RankingBars rows={result.groups[field] || []} />
+            </section>
+          </div>
+          {data && <Breakdown groups={result.groups} field={field} />}
+          {data && <Collaborators rows={result.collaborators} />}
         </>
       )}
     </section>
