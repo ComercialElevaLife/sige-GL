@@ -94,11 +94,13 @@ function normalizeScope(role, input) {
 function normalizeClientIds(role, input) {
   const ids = [...new Set((Array.isArray(input) ? input : []).filter(Boolean))];
   if (role === "admin") return [];
-  if (role === "professor" && ids.length) return ids;
+  if ((role === "professor" || role === "coordinator") && ids.length) return ids;
   if (role === "client" && ids.length === 1) return ids;
   throw new HttpError(400, role === "professor"
     ? "Professor deve possuir ao menos uma empresa vinculada."
-    : "Usuário cliente deve possuir uma única empresa vinculada.");
+    : role === "coordinator"
+      ? "Coordenador deve possuir ao menos uma empresa vinculada."
+      : "Usuário cliente deve possuir uma única empresa vinculada.");
 }
 
 // O link enviado por e-mail usa APP_PUBLIC_URL. Sem ela, só aceita o Origin da própria aplicação
@@ -293,6 +295,20 @@ async function userStore() {
     // Escopo opcional do gestor do cliente: colunas aditivas, vazias para todos os usuários existentes.
     await query("alter table app_user add column if not exists unit_ids text[] not null default '{}'");
     await query("alter table app_user add column if not exists sector_ids text[] not null default '{}'");
+    // Novo perfil "coordinator": amplia a lista de perfis aceitos. Só mexe na restrição se ela ainda não conhece o perfil.
+    const roleCheck = await query(
+      `select c.conname, pg_get_constraintdef(c.oid) as def
+       from pg_constraint c join pg_class t on t.oid = c.conrelid
+       where t.relname = 'app_user' and c.contype = 'c' and pg_get_constraintdef(c.oid) ilike '%role%'`,
+    );
+    for (const row of roleCheck.rows) {
+      if (!row.def.includes("coordinator")) {
+        await query(`alter table app_user drop constraint "${row.conname.replace(/"/g, "")}"`);
+        await query(
+          "alter table app_user add constraint app_user_role_check check (role in ('admin', 'professor', 'client', 'coordinator'))",
+        );
+      }
+    }
   })().catch((error) => {
     userSchemaReady = undefined;
     throw error;
@@ -353,7 +369,7 @@ function scopedSnapshot(state, user) {
     classes: (state?.classes || []).filter((item) => allowedClients.has(item.clientId) && inScope(item)),
     attendance,
     // Professor não precisa dos logs operacionais de outros profissionais;
-    // cliente não recebe logs de auditoria.
+    // cliente e coordenador não recebem logs de auditoria.
     audit: user.role === "professor"
       ? (state?.audit || []).filter((item) => item.teacherId === user.id)
       : [],
@@ -555,7 +571,7 @@ app.http("users", {
       const { name, email, role, clientIds, unitIds, sectorIds, session } = await request.json();
       await requireAdmin(request, session);
       await userStore();
-      if (!name?.trim() || !email?.trim() || !["admin", "professor", "client"].includes(role)) {
+      if (!name?.trim() || !email?.trim() || !["admin", "coordinator", "professor", "client"].includes(role)) {
         return json({ error: "Nome, e-mail e perfil válido são obrigatórios." }, 400);
       }
       const invitation = accessToken();
@@ -638,7 +654,7 @@ app.http("userById", {
         return json({ invitationUrl: delivery.sent ? undefined : invitationUrl, delivery });
       }
       const { name, email, role, clientIds, unitIds, sectorIds, active } = payload;
-      if (!name?.trim() || !email?.trim() || !["admin", "professor", "client"].includes(role)) {
+      if (!name?.trim() || !email?.trim() || !["admin", "coordinator", "professor", "client"].includes(role)) {
         return json({ error: "Nome, e-mail e perfil válido são obrigatórios." }, 400);
       }
       if (id === actor.id && (role !== "admin" || active === false)) {
@@ -705,7 +721,7 @@ app.http("sync", {
     try {
       const { state, session, baseVersion } = await request.json();
       const user = await userFrom(request, session);
-      if (user.role === "client") return json({ error: "Usuário cliente possui acesso somente de visualização." }, 403);
+      if (user.role === "client" || user.role === "coordinator") return json({ error: "Seu perfil possui acesso somente de visualização." }, 403);
       if (!state || typeof state !== "object") return json({ error: "Estado de sincronização inválido." }, 400);
       await stateStore();
       const stored = await query("select payload, registry_version from app_state where id = 1");
@@ -828,7 +844,7 @@ app.http("saveClass", {
     try {
       const body = await request.json();
       const user = await userFrom(request, body.session);
-      if (user.role === "client") throw new HttpError(403, "Usuário cliente possui acesso somente de visualização.");
+      if (user.role === "client" || user.role === "coordinator") throw new HttpError(403, "Seu perfil possui acesso somente de visualização.");
       const a = body.aula || {};
       const id = String(a.id || "");
       if (!/^AULA-[A-Za-z0-9-]{4,60}$/.test(id)) throw new HttpError(400, "Identificador da aula inválido.");
