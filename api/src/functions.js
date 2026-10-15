@@ -36,16 +36,25 @@ const configurationError = (error) => {
 async function userFrom(request, suppliedToken = "") {
   const token = suppliedToken || request.headers.get("x-sige-session") || request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
   if (!token) throw new HttpError(401, "Sessão não informada.");
+  await userStore();
   await sessionStore();
   const result = await query(
-    `select u.id, u.name, u.email, u.role, u.client_ids, u.active
+    `select u.id, u.name, u.email, u.role, u.client_ids, u.unit_ids, u.sector_ids, u.active
      from app_session s join app_user u on u.id = s.user_id
      where s.token_hash = $1 and s.expires_at > now() and u.active`,
     [tokenHash(token)],
   );
   const account = result.rows[0];
   if (!account) throw new HttpError(401, "Sessão expirada. Entre novamente.");
-  return { id: account.id, name: account.name, email: account.email, role: account.role, clientIds: account.client_ids || [] };
+  return {
+    id: account.id,
+    name: account.name,
+    email: account.email,
+    role: account.role,
+    clientIds: account.client_ids || [],
+    unitIds: account.unit_ids || [],
+    sectorIds: account.sector_ids || [],
+  };
 }
 
 function publicUser(row) {
@@ -55,6 +64,8 @@ function publicUser(row) {
     email: row.email,
     role: row.role,
     clientIds: row.client_ids || [],
+    unitIds: row.unit_ids || [],
+    sectorIds: row.sector_ids || [],
     active: row.active,
     createdAt: row.created_at,
   };
@@ -72,6 +83,12 @@ async function requireAdmin(request, suppliedToken = "") {
   const user = await userFrom(request, suppliedToken);
   if (user.role !== "admin") throw new HttpError(403, "Acesso restrito ao administrador.");
   return user;
+}
+
+// Gestor do cliente (role "client") pode ser restrito a unidades e/ou setores da empresa. Sem marcação, vê a empresa toda.
+function normalizeScope(role, input) {
+  if (role !== "client") return [];
+  return [...new Set((Array.isArray(input) ? input : []).map((item) => String(item ?? "").trim()).filter(Boolean))].slice(0, 200);
 }
 
 function normalizeClientIds(role, input) {
@@ -273,6 +290,9 @@ async function userStore() {
     if (column.rows[0] && column.rows[0].data_type !== "ARRAY") {
       await query("alter table app_user alter column client_ids type text[] using client_ids::text[]");
     }
+    // Escopo opcional do gestor do cliente: colunas aditivas, vazias para todos os usuários existentes.
+    await query("alter table app_user add column if not exists unit_ids text[] not null default '{}'");
+    await query("alter table app_user add column if not exists sector_ids text[] not null default '{}'");
   })().catch((error) => {
     userSchemaReady = undefined;
     throw error;
@@ -296,9 +316,24 @@ function scopedSnapshot(state, user) {
   if (user.role === "admin") return state;
   const allowedClients = new Set(user.clientIds || []);
   const data = state?.data || {};
-  const people = (data.people || []).filter((item) => allowedClients.has(item.clientId));
+  // Gestor do cliente restrito a unidades e/ou setores: o servidor só entrega esse recorte.
+  const unitScope = new Set(user.role === "client" ? user.unitIds || [] : []);
+  const sectorScope = new Set(user.role === "client" ? user.sectorIds || [] : []);
+  const restricted = unitScope.size > 0 || sectorScope.size > 0;
+  const inScope = (item) =>
+    !restricted || ((!unitScope.size || unitScope.has(item.unitId)) && (!sectorScope.size || sectorScope.has(item.sectorId)));
+  const people = (data.people || []).filter((item) => allowedClients.has(item.clientId) && inScope(item));
   const personIds = new Set(people.map((item) => item.id));
-  const units = (data.units || []).filter((item) => allowedClients.has(item.clientId));
+  const companyUnits = (data.units || []).filter((item) => allowedClients.has(item.clientId));
+  const companyUnitIds = new Set(companyUnits.map((item) => item.id));
+  const sectors = (data.sectors || []).filter(
+    (item) =>
+      companyUnitIds.has(item.unitId) &&
+      (!restricted || ((!unitScope.size || unitScope.has(item.unitId)) && (!sectorScope.size || sectorScope.has(item.id)))),
+  );
+  const units = restricted
+    ? companyUnits.filter((item) => (!unitScope.size || unitScope.has(item.id)) && sectors.some((sector) => sector.unitId === item.id))
+    : companyUnits;
   const unitIds = new Set(units.map((item) => item.id));
   const attendance = Object.fromEntries(
     Object.entries(state?.attendance || {}).filter(([personId]) => personIds.has(personId)),
@@ -310,12 +345,12 @@ function scopedSnapshot(state, user) {
       units,
       workShifts: (data.workShifts || []).filter((item) => allowedClients.has(item.clientId)),
       routines: data.routines || [],
-      sectors: (data.sectors || []).filter((item) => unitIds.has(item.unitId)),
+      sectors,
       locations: (data.locations || []).filter((item) => unitIds.has(item.unitId)),
       people,
     },
-    schedules: (state?.schedules || []).filter((item) => allowedClients.has(item.clientId)),
-    classes: (state?.classes || []).filter((item) => allowedClients.has(item.clientId)),
+    schedules: (state?.schedules || []).filter((item) => allowedClients.has(item.clientId) && inScope(item)),
+    classes: (state?.classes || []).filter((item) => allowedClients.has(item.clientId) && inScope(item)),
     attendance,
     // Professor não precisa dos logs operacionais de outros profissionais;
     // cliente não recebe logs de auditoria.
@@ -370,7 +405,7 @@ app.http("login", {
       }
       await userStore();
       const result = await query(
-        "select id, name, email, password_hash, role, client_ids, active from app_user where lower(email) = lower($1)",
+        "select id, name, email, password_hash, role, client_ids, unit_ids, sector_ids, active from app_user where lower(email) = lower($1)",
         [String(email || "")],
       );
       const account = result.rows[0];
@@ -384,6 +419,8 @@ app.http("login", {
         email: account.email,
         role: account.role,
         clientIds: account.client_ids || [],
+        unitIds: account.unit_ids || [],
+        sectorIds: account.sector_ids || [],
       };
       await sessionStore();
       const token = accessToken();
@@ -515,7 +552,7 @@ app.http("users", {
   route: "users",
   handler: async (request) => {
     try {
-      const { name, email, role, clientIds, session } = await request.json();
+      const { name, email, role, clientIds, unitIds, sectorIds, session } = await request.json();
       await requireAdmin(request, session);
       await userStore();
       if (!name?.trim() || !email?.trim() || !["admin", "professor", "client"].includes(role)) {
@@ -525,10 +562,10 @@ app.http("users", {
       const invitationUrl = publicUrl(request, invitation, "invite");
       const ids = normalizeClientIds(role, clientIds);
       const result = await query(
-        `insert into app_user (name, email, password_hash, role, client_ids, active, invitation_token_hash, invitation_expires_at)
-         values ($1, lower($2), $3, $4, $5::text[], false, $6, now() + interval '7 days')
-         returning id, name, email, role, client_ids, active, created_at`,
-        [name.trim(), email.trim(), await bcrypt.hash(accessToken(), 12), role, ids, tokenHash(invitation)],
+        `insert into app_user (name, email, password_hash, role, client_ids, unit_ids, sector_ids, active, invitation_token_hash, invitation_expires_at)
+         values ($1, lower($2), $3, $4, $5::text[], $7::text[], $8::text[], false, $6, now() + interval '7 days')
+         returning id, name, email, role, client_ids, unit_ids, sector_ids, active, created_at`,
+        [name.trim(), email.trim(), await bcrypt.hash(accessToken(), 12), role, ids, tokenHash(invitation), normalizeScope(role, unitIds), normalizeScope(role, sectorIds)],
       );
       const account = result.rows[0];
       const delivery = await sendAccessEmail({
@@ -554,7 +591,7 @@ app.http("usersList", {
       const { session } = await request.json();
       await requireAdmin(request, session);
       await userStore();
-      const result = await query("select id, name, email, role, client_ids, active, created_at from app_user order by name");
+      const result = await query("select id, name, email, role, client_ids, unit_ids, sector_ids, active, created_at from app_user order by name");
       return json({ users: result.rows.map(publicUser) });
     } catch (error) {
       return configurationError(error);
@@ -600,7 +637,7 @@ app.http("userById", {
         });
         return json({ invitationUrl: delivery.sent ? undefined : invitationUrl, delivery });
       }
-      const { name, email, role, clientIds, active } = payload;
+      const { name, email, role, clientIds, unitIds, sectorIds, active } = payload;
       if (!name?.trim() || !email?.trim() || !["admin", "professor", "client"].includes(role)) {
         return json({ error: "Nome, e-mail e perfil válido são obrigatórios." }, 400);
       }
@@ -609,9 +646,9 @@ app.http("userById", {
       }
       const result = await query(
         `update app_user set name = $1, email = lower($2), role = $3,
-         client_ids = $4::text[], active = coalesce($5::boolean, active) where id = $6
-         returning id, name, email, role, client_ids, active, created_at`,
-        [name.trim(), email.trim(), role, normalizeClientIds(role, clientIds), typeof active === "boolean" ? active : null, id],
+         client_ids = $4::text[], unit_ids = $7::text[], sector_ids = $8::text[], active = coalesce($5::boolean, active) where id = $6
+         returning id, name, email, role, client_ids, unit_ids, sector_ids, active, created_at`,
+        [name.trim(), email.trim(), role, normalizeClientIds(role, clientIds), typeof active === "boolean" ? active : null, id, normalizeScope(role, unitIds), normalizeScope(role, sectorIds)],
       );
       if (!result.rows[0]) return json({ error: "Usuário não encontrado." }, 404);
       return json({ user: publicUser(result.rows[0]) });
@@ -890,6 +927,7 @@ app.http("classPhoto", {
     try {
       const body = await request.json();
       const user = await userFrom(request, body.session);
+      if (user.role === "client") throw new HttpError(403, "A foto de evidência é de uso interno da ElevaLife.");
       await aulaStore();
       const result = await query(
         `select a.client_id, f.image, f.mime, f.created_at, f.discard_at
@@ -922,13 +960,18 @@ app.http("classList", {
       if (new Date(to) - new Date(from) > 370 * 24 * 3600 * 1000) throw new HttpError(400, "Período máximo de 12 meses.");
       await aulaStore();
       const scoped = user.role !== "admin";
+      // Gestor do cliente restrito a unidades/setores só recebe aulas desse recorte (aulas sem unidade/setor ficam de fora).
+      const unitScope = user.role === "client" ? user.unitIds : [];
+      const sectorScope = user.role === "client" ? user.sectorIds : [];
       const aulas = await query(
         `select id, client_id, unit_id, sector_id, location_id, shift, status, closed_at, photo_status
          from aula
          where closed_at >= $1 and closed_at < $2 and ($3::boolean = false or client_id = any($4::text[]))
+           and (cardinality($5::text[]) = 0 or unit_id = any($5::text[]))
+           and (cardinality($6::text[]) = 0 or sector_id = any($6::text[]))
          order by closed_at
          limit 5000`,
-        [from, to, scoped, user.clientIds],
+        [from, to, scoped, user.clientIds, unitScope, sectorScope],
       );
       const ids = aulas.rows.map((row) => row.id);
       const presences = ids.length
