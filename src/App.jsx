@@ -67,7 +67,7 @@ const K = {
 const roles = {
   admin: "Administrador",
   professor: "Professor",
-  client: "Cliente",
+  client: "Gestor do cliente",
 };
 const shifts = ["Administrativo", "1º turno", "2º turno", "3º turno"];
 const scaleOptions = ["Sem escala definida", "5x2", "5x3", "6x1", "12x36", "Escala de letras", "Outra"];
@@ -139,12 +139,25 @@ const normalizeUser = (user) => {
     return { ...professor, clientIds: [...new Set(user.clientIds || (clientId ? [clientId] : []))] };
   }
   const { clientIds, ...client } = user;
-  return { ...client, clientId: user.clientId || user.clientIds?.[0] || "" };
+  return {
+    ...client,
+    clientId: user.clientId || user.clientIds?.[0] || "",
+    unitIds: Array.isArray(user.unitIds) ? user.unitIds : [],
+    sectorIds: Array.isArray(user.sectorIds) ? user.sectorIds : [],
+  };
 };
-const userCompaniesLabel = (user, clients) => {
+const userCompaniesLabel = (user, clients, units = [], sectors = []) => {
   if (user.role === "admin") return "Sem empresa vinculada";
   const names = clientIdsFor(user).map((id) => nameOf(clients, id)).filter((name) => name !== "—");
-  return names.join(", ") || "Empresa não definida";
+  let label = names.join(", ") || "Empresa não definida";
+  if (user.role === "client") {
+    const scope = [
+      ...(user.unitIds || []).map((id) => nameOf(units, id)),
+      ...(user.sectorIds || []).map((id) => nameOf(sectors, id)),
+    ].filter((name) => name !== "—");
+    label += scope.length ? ` (${scope.join(", ")})` : " (empresa toda)";
+  }
+  return label;
 };
 const certificateFor = async (payload) => {
   const source = JSON.stringify(payload);
@@ -882,6 +895,8 @@ function UsersPanel({ users, setUsers, data, token, centralReady }) {
     role: "professor",
     clientIds: [],
     clientId: data.clients[0]?.id || "",
+    unitIds: [],
+    sectorIds: [],
   });
   const [open, setOpen] = useState(false),
     [editingId, setEditingId] = useState(null),
@@ -902,6 +917,8 @@ function UsersPanel({ users, setUsers, data, token, centralReady }) {
       role: user.role,
       clientIds: clientIdsFor(user),
       clientId: user.clientId || clientIdsFor(user)[0] || "",
+      unitIds: user.unitIds || [],
+      sectorIds: user.sectorIds || [],
     });
     setOpen(true);
   };
@@ -910,7 +927,16 @@ function UsersPanel({ users, setUsers, data, token, centralReady }) {
     role,
     clientIds: role === "professor" ? current.clientIds : [],
     clientId: role === "client" ? current.clientId || current.clientIds[0] || data.clients[0]?.id || "" : "",
+    unitIds: role === "client" ? current.unitIds : [],
+    sectorIds: role === "client" ? current.sectorIds : [],
   }));
+  const toggleScope = (field, id) => setF((current) => ({
+    ...current,
+    [field]: current[field].includes(id) ? current[field].filter((item) => item !== id) : [...current[field], id],
+  }));
+  const changeCompany = (clientId) => setF((current) => ({ ...current, clientId, unitIds: [], sectorIds: [] }));
+  const companyUnits = data.units.filter((unit) => unit.clientId === f.clientId);
+  const companySectors = data.sectors.filter((sector) => companyUnits.some((unit) => unit.id === sector.unitId));
   const toggleProfessorClient = (clientId) => setF((current) => ({
     ...current,
     clientIds: current.clientIds.includes(clientId)
@@ -934,7 +960,7 @@ function UsersPanel({ users, setUsers, data, token, centralReady }) {
       ? {}
       : f.role === "professor"
         ? { clientIds: f.clientIds }
-        : { clientId: f.clientId };
+        : { clientId: f.clientId, unitIds: f.unitIds, sectorIds: f.sectorIds };
     try {
       let account;
       let invitationUrl;
@@ -942,6 +968,8 @@ function UsersPanel({ users, setUsers, data, token, centralReady }) {
         const payload = {
           ...base,
           clientIds: f.role === "admin" ? [] : f.role === "professor" ? f.clientIds : [f.clientId],
+          unitIds: f.role === "client" ? f.unitIds : [],
+          sectorIds: f.role === "client" ? f.sectorIds : [],
           active: existing?.active,
         };
         const remote = editingId
@@ -996,7 +1024,7 @@ function UsersPanel({ users, setUsers, data, token, centralReady }) {
           <h1>Usuários</h1>
           <p>
             Administrador: gestão completa. Professor: coleta vinculada.
-            Cliente: dashboards.
+            Gestor do cliente: acompanha os indicadores da empresa, de unidades ou de setores específicos, somente leitura.
           </p>
         </div>
         <button className="primary" onClick={openCreate}>
@@ -1018,7 +1046,7 @@ function UsersPanel({ users, setUsers, data, token, centralReady }) {
                 <strong>{personLabel(x)}</strong>
                 <span>
                   {roles[x.role]} · {x.email} ·{" "}
-                  {userCompaniesLabel(x, data.clients)}
+                  {userCompaniesLabel(x, data.clients, data.units, data.sectors)}
                 </span>
               </div>
               <button className="row-edit" onClick={() => openEdit(x)} aria-label={`Editar ${x.name}`}>
@@ -1070,7 +1098,12 @@ function UsersPanel({ users, setUsers, data, token, centralReady }) {
             </label>
             {f.role === "admin" && <p className="form-help">Administrador tem acesso a todas as empresas e não possui empresa vinculada.</p>}
             {f.role === "professor" && <fieldset className="check-list"><legend>Empresas vinculadas</legend>{data.clients.map((client) => <label key={client.id}><input type="checkbox" checked={f.clientIds.includes(client.id)} onChange={() => toggleProfessorClient(client.id)} />{client.name}</label>)}</fieldset>}
-            {f.role === "client" && <label>Cliente / empresa<select value={f.clientId} onChange={(e) => setF({ ...f, clientId: e.target.value })}><option value="">Selecione</option>{data.clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label>}
+            {f.role === "client" && <>
+              <label>Cliente / empresa<select value={f.clientId} onChange={(e) => changeCompany(e.target.value)}><option value="">Selecione</option>{data.clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label>
+              {!!companyUnits.length && <fieldset className="check-list"><legend>Unidades (opcional)</legend>{companyUnits.map((unit) => <label key={unit.id}><input type="checkbox" checked={f.unitIds.includes(unit.id)} onChange={() => toggleScope("unitIds", unit.id)} />{unit.name}</label>)}</fieldset>}
+              {!!companySectors.length && <fieldset className="check-list"><legend>Setores (opcional)</legend>{companySectors.map((sector) => <label key={sector.id}><input type="checkbox" checked={f.sectorIds.includes(sector.id)} onChange={() => toggleScope("sectorIds", sector.id)} />{sector.name} <span className="muted">· {nameOf(data.units, sector.unitId)}</span></label>)}</fieldset>}
+              <p className="form-help">Sem marcação, o gestor vê a empresa toda. Com unidades ou setores marcados, vê só esse recorte. Marcando os dois, vê apenas os setores marcados que pertencem às unidades marcadas. O gestor não vê fotos de evidência e não altera cadastros.</p>
+            </>}
             {feedback && <p className="error">{feedback.startsWith("Selecione") ? feedback : ""}</p>}
             <p className="form-help">{editingId ? "A senha não é alterada nesta tela. Use o fluxo de redefinição de senha." : "Ao salvar, o convite de primeiro acesso fica preparado para o envio e o usuário cria a própria senha."}</p>
             <button className="primary full">{editingId ? "Salvar alterações" : "Cadastrar e enviar convite"}</button>
