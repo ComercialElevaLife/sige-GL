@@ -27,10 +27,13 @@ import {
 import { verifyFace } from "./biometrics";
 import { queueClass, flushClasses, pendingClasses } from "./classOutbox";
 import { generateDashboardReport } from "./report";
+import DashboardView from "./DashboardView";
+import { computeIndicators, currentMonth, monthRange } from "./indicators";
 import { plannedClassesForMonth, weekdays } from "./scheduling";
 import {
   centralActivate,
   centralBootstrap,
+  centralClasses,
   centralCreateUser,
   centralDeleteUser,
   centralLogin,
@@ -452,263 +455,99 @@ function Filters({
   );
 }
 
-function Dashboard({ data, schedules, classes, attendance, user }) {
+function Dashboard({ data, schedules, classes, attendance, user, token }) {
   const permittedClientIds = clientIdsFor(user);
   const [filter, setFilter] = useState({
-      clientId: user.role === "client" ? permittedClientIds[0] || "" : "",
-      unitId: "",
-      sectorId: "",
-      shift: "",
-      locationId: "",
-    }),
-    [detail, setDetail] = useState(null);
-  const people = data.people.filter(
-    (x) =>
-      (user.role === "admin" || permittedClientIds.includes(x.clientId)) &&
-      (!filter.clientId || x.clientId === filter.clientId) &&
-      (!filter.unitId || x.unitId === filter.unitId) &&
-      (!filter.sectorId || x.sectorId === filter.sectorId) &&
-      (!filter.shift || x.shift === filter.shift) &&
-      (!filter.locationId || x.locationId === filter.locationId) && x.active !== false,
-  );
-  const done = people.filter((x) => attendance[x.id]?.status === "present"),
-    missing = people.filter((x) => attendance[x.id]?.status !== "present");
-  const related = classes.filter(
-    (x) =>
-      (user.role === "admin" || permittedClientIds.includes(x.clientId)) &&
-      (!filter.clientId || x.clientId === filter.clientId) &&
-      (!filter.unitId || x.unitId === filter.unitId) &&
-      (!filter.sectorId || x.sectorId === filter.sectorId) &&
-      (!filter.shift || x.shift === filter.shift) &&
-      (!filter.locationId || x.locationId === filter.locationId),
-  );
-  const applied = related.filter((x) => x.status === "applied").length,
-    cancelled = related.filter((x) => x.status === "cancelled").length;
-  const planned = plannedClassesForMonth(schedules, {
-    clientId: user.role === "client" ? permittedClientIds[0] : filter.clientId,
-    unitId: filter.unitId,
-    sectorId: filter.sectorId,
-    shift: filter.shift,
-    locationId: filter.locationId,
+    clientId: user.role === "client" ? permittedClientIds[0] || "" : "",
+    unitId: "",
+    sectorId: "",
+    shift: "",
+    locationId: "",
   });
-  const adherence = people.length ? (done.length / people.length) * 100 : 0;
-  const appliedRate = planned ? (applied / planned) * 100 : 0;
+  const [month, setMonth] = useState(currentMonth());
+  const [remote, setRemote] = useState({ aulas: [], presencas: [], loaded: false });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    if (!token) {
+      setError("Entre com a sua conta para ver os indicadores.");
+      return undefined;
+    }
+    setLoading(true);
+    setError("");
+    const { from, to } = monthRange(month);
+    centralClasses(token, { from, to })
+      .then((response) => !cancelled && setRemote({ aulas: response.aulas || [], presencas: response.presencas || [], loaded: true }))
+      .catch((failure) => !cancelled && setError(navigator.onLine ? failure.message || "Falha ao consultar o servidor." : "Sem conexão. Os indicadores precisam de internet."))
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [token, month, attempt]);
+  const inScope = (x) =>
+    (user.role === "admin" || permittedClientIds.includes(x.clientId)) &&
+    (!filter.clientId || x.clientId === filter.clientId) &&
+    (!filter.unitId || x.unitId === filter.unitId) &&
+    (!filter.sectorId || x.sectorId === filter.sectorId) &&
+    (!filter.shift || x.shift === filter.shift) &&
+    (!filter.locationId || x.locationId === filter.locationId);
+  const people = useMemo(() => data.people.filter((x) => x.active !== false && inScope(x)), [data.people, filter, user]);
+  const result = useMemo(
+    () =>
+      remote.loaded
+        ? computeIndicators({
+            aulas: remote.aulas,
+            presencas: remote.presencas,
+            people,
+            schedules,
+            filter: { ...filter, clientId: user.role === "client" ? permittedClientIds[0] : filter.clientId },
+            month,
+            labels: { clients: data.clients, units: data.units, sectors: data.sectors },
+          })
+        : null,
+    [remote, people, schedules, filter, month, data.clients, data.units, data.sectors],
+  );
+  // Relatório em PDF: versão anterior, substituída pelo quadro executivo no próximo ajuste.
   const downloadPdf = () => {
     try {
+      const related = classes.filter(inScope);
       generateDashboardReport({
         data,
         people,
         classes: related,
         attendance,
         filter,
-        planned,
+        planned: plannedClassesForMonth(schedules, { ...filter, clientId: user.role === "client" ? permittedClientIds[0] : filter.clientId }),
       });
-    } catch (error) {
+    } catch (failure) {
       window.alert("Não foi possível gerar o PDF. Atualize a página e tente novamente.");
     }
   };
-  const groups = (field, list, label) =>
-    Object.values(
-      people.reduce((out, x) => {
-        const k = x[field];
-        out[k] ??= { key: k, label: label(k), total: 0, present: 0 };
-        out[k].total++;
-        if (attendance[x.id]?.status === "present") out[k].present++;
-        return out;
-      }, {}),
-    );
-  const companyGroups = groups("clientId", people, (id) => nameOf(data.clients, id)).sort((a, b) => b.present / Math.max(b.total, 1) - a.present / Math.max(a.total, 1));
-  const Group = ({ field, label, title }) => (
-    <section className="card report-card">
-      <div className="card-heading">
-        <h2>{title}</h2>
-        <p>Clique em uma linha para ver o detalhamento.</p>
-      </div>
-      <div className="report-rows">
-        {groups(field, people, label).map((g) => (
-          <button
-            className="report-row interactive"
-            key={g.key}
-            onClick={() =>
-              setDetail({
-                title: g.label,
-                people: people.filter((x) => x[field] === g.key),
-              })
-            }
-          >
-            <strong>{g.label}</strong>
-            <span>
-              {g.present} presentes · {g.total - g.present} faltantes
-            </span>
-            <div className="bar">
-              <i
-                style={{
-                  width: `${g.total ? (g.present / g.total) * 100 : 0}%`,
-                }}
-              />
-            </div>
-            <b>{rate(g.present, g.total)}</b>
-          </button>
-        ))}
-      </div>
-    </section>
-  );
   return (
-    <section className="dashboard">
-      <section className="heading">
-        <div>
-          <p className="eyebrow">DASHBOARD DE INDICADORES</p>
-          <h1>Adesão da Ginástica Laboral</h1>
-          <p>Filtros por cliente, unidade, setor, turno e local de aula.</p>
-        </div>
-        <button className="primary dashboard-download" onClick={downloadPdf}>
-          <FileText size={18} /> Relatório em PDF
-        </button>
-      </section>
-      <Filters
-        value={filter}
-        setValue={setFilter}
-        clients={data.clients}
-        units={data.units}
-        sectors={data.sectors}
-        locations={data.locations}
-        scopeIds={permittedClientIds}
-      />
-      <section className="card" style={{ padding: 24, marginBottom: 18, display: "grid", gridTemplateColumns: "minmax(170px,.8fr) 1.2fr", gap: 24, alignItems: "center" }}>
-        <div style={{ textAlign: "center", padding: 14, borderRadius: 14, background: "var(--tint)" }}>
-          <p className="eyebrow">ADESÃO GERAL</p>
-          <strong style={{ fontFamily: '"Montserrat Alternates", sans-serif', fontSize: 44, color: "var(--wine)" }}>{rate(done.length, people.length)}</strong>
-          <p className="muted" style={{ margin: "6px 0 0" }}>{done.length} de {people.length} participantes</p>
-        </div>
-        <div>
-          <div className="card-heading" style={{ padding: "0 0 12px" }}><h2>Visão executiva do período</h2><p>Leitura rápida da adesão e execução das aulas previstas.</p></div>
-          <div className="report-rows">{companyGroups.map((group) => <div className="report-row" key={group.key}><strong>{group.label}</strong><span>{group.present} presentes de {group.total}</span><div className="bar"><i style={{ width: `${group.total ? (group.present / group.total) * 100 : 0}%` }} /></div><b>{rate(group.present, group.total)}</b></div>)}</div>
-        </div>
-      </section>
-      <div className="metrics">
-        <article>
-          <span>Participantes</span>
-          <strong>{people.length}</strong>
-          <small>Lista prevista</small>
-        </article>
-        <article>
-          <span>Presentes</span>
-          <strong>{done.length}</strong>
-          <small>Presença confirmada</small>
-        </article>
-        <article>
-          <span>Faltantes</span>
-          <strong>{missing.length}</strong>
-          <small>Sem registro</small>
-        </article>
-        <article className="accent">
-          <span>Taxa de adesão</span>
-          <strong>{rate(done.length, people.length)}</strong>
-          <small>Meta: 75%</small>
-        </article>
-        <article>
-          <span>Aulas aplicadas</span>
-          <strong>{rate(applied, planned)}</strong>
-          <small>
-            {applied}/{planned} previstas · meta: 90%
-          </small>
-        </article>
-        <article>
-          <span>Cancelamentos</span>
-          <strong>{cancelled}</strong>
-          <small>{rate(cancelled, planned)} das aulas previstas</small>
-        </article>
-      </div>
-      <div className="report-grid">
-        <Group
-          title="Adesão geral por empresa"
-          field="clientId"
-          label={(id) => nameOf(data.clients, id)}
+    <DashboardView
+      result={result}
+      month={month}
+      onMonth={setMonth}
+      canNext={month < currentMonth()}
+      loading={loading}
+      error={error}
+      onRetry={() => setAttempt((n) => n + 1)}
+      pending={pendingClasses(user.id)}
+      onPdf={downloadPdf}
+      filters={
+        <Filters
+          value={filter}
+          setValue={setFilter}
+          clients={data.clients}
+          units={data.units}
+          sectors={data.sectors}
+          locations={data.locations}
+          scopeIds={permittedClientIds}
         />
-        <Group
-          title="Adesão por unidade"
-          field="unitId"
-          label={(id) => nameOf(data.units, id)}
-        />
-        <Group
-          title="Adesão por setor"
-          field="sectorId"
-          label={(id) => nameOf(data.sectors, id)}
-        />
-        <Group title="Adesão por turno" field="shift" label={(x) => x} />
-        <section className="card analytics-summary">
-          <div className="card-heading">
-            <h2>Leitura executiva</h2>
-            <p>Metas mensais e situação operacional.</p>
-          </div>
-          <div className="analytics-body">
-            <div
-              className="donut"
-              style={{ "--value": `${adherence}%` }}
-              aria-label={`Taxa de adesão de ${Math.round(adherence)}%`}
-            >
-              <strong>{Math.round(adherence)}%</strong>
-              <span>adesão</span>
-            </div>
-            <div className="insight-list">
-              <p>
-                <span className={adherence >= 75 ? "ok-dot" : "warn-dot"} />
-                Meta de adesão: <b>75%</b> · atual: <b>{rate(done.length, people.length)}</b>
-              </p>
-              <p>
-                <span className={appliedRate >= 90 ? "ok-dot" : "warn-dot"} />
-                Meta de aulas aplicadas: <b>90%</b> · atual: <b>{rate(applied, planned)}</b>
-              </p>
-              <p>
-                <span className="wine-dot" />
-                Cancelamentos no recorte: <b>{cancelled}</b>
-              </p>
-            </div>
-          </div>
-        </section>
-      </div>
-      <section className="card missing-card">
-        <div className="card-heading">
-          <h2>Participantes sem registro</h2>
-          <p>Estão na lista, mas não tiveram presença confirmada.</p>
-        </div>
-        <div className="missing-list">
-          {missing.map((x) => (
-            <span key={x.id}>
-              {x.name}
-              <small>
-                {nameOf(data.sectors, x.sectorId)} · {x.shift}
-              </small>
-            </span>
-          ))}
-        </div>
-      </section>
-      {detail && (
-        <Modal
-          title={`Detalhamento: ${detail.title}`}
-          onClose={() => setDetail(null)}
-        >
-          <div className="participants">
-            {detail.people.map((x) => (
-              <article className="participant" key={x.id}>
-                <div className="avatar">{personLabel(x)[0]}</div>
-                <div className="person">
-                  <strong>{personLabel(x)}</strong>
-                  <span>{x.registration}</span>
-                </div>
-                <span
-                  className={`badge ${attendance[x.id]?.status === "present" ? "present" : "manual_review"}`}
-                >
-                  {attendance[x.id]?.status === "present"
-                    ? "Presente"
-                    : "Sem registro"}
-                </span>
-              </article>
-            ))}
-          </div>
-        </Modal>
-      )}
-    </section>
+      }
+    />
   );
 }
 
@@ -2038,6 +1877,7 @@ export default function App() {
             classes={classes}
             attendance={attendance}
             user={user}
+            token={token}
           />
         )}{" "}
         {page === "collect" && (
