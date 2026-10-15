@@ -13,9 +13,9 @@ export function findRegistrationOwner(people, clientId, registration, ignoreId) 
 export function checkPersonRow({ registration, turn, names, company, unit, sector, location, people, seen, line }) {
   if (!registration) return "Matrícula ou CPF não informada.";
   if (!company) return `Empresa "${names.company}" não cadastrada.`;
-  if (!unit) return `Unidade "${names.unit}" não encontrada na empresa ${company.name}.`;
-  if (!sector) return `Setor "${names.sector}" não encontrado na unidade ${unit.name}.`;
-  if (!location) return `Local da aula "${names.location}" não encontrado na unidade ${unit.name}.`;
+  if (!unit) return names.unit ? `Unidade "${names.unit}" não encontrada na empresa ${company.name}.` : "Unidade não informada.";
+  if (!sector) return names.sector ? `Setor "${names.sector}" não encontrado na unidade ${unit.name}.` : "Setor não informado.";
+  if (!location) return names.location ? `Local da aula "${names.location}" não encontrado na unidade ${unit.name}.` : "Local da aula não informado.";
   if (!turn) return "Turno não informado.";
   const owner = findRegistrationOwner(people, company.id, registration);
   if (owner) return `Matrícula ${registration} já cadastrada nesta empresa (${owner.name?.trim() || "colaborador sem nome"}).`;
