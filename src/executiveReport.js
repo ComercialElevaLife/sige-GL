@@ -1,5 +1,5 @@
 import { jsPDF } from "jspdf";
-import { GOALS, monthLabel } from "./indicators";
+import { GOALS } from "./indicators";
 
 // Relatório executivo: indicadores gerais, quadro por recorte e atenção por colaborador.
 // Sem lista aula a aula nem pessoa a pessoa; cabe em 1 a 2 páginas.
@@ -25,7 +25,7 @@ const clip = (pdf, text, max) => {
   return out === String(text ?? "—") ? out : `${out.trimEnd()}…`;
 };
 
-export function generateExecutiveReport({ result, month, scopeText, labels = {}, generatedAt = new Date() }) {
+export function generateExecutiveReport({ result, periodLabel, scopeText, labels = {}, generatedAt = new Date() }) {
   const pdf = new jsPDF({ unit: "mm", format: "a4" });
   const t = result.totals;
   const c = result.classes;
@@ -46,7 +46,7 @@ export function generateExecutiveReport({ result, month, scopeText, labels = {},
     pdf.setFont("helvetica", "bold");
     if (compact) {
       pdf.setFontSize(11);
-      pdf.text(`ElevaLife · Ginástica Laboral · ${monthLabel(month)}`, L, 10);
+      pdf.text(`ElevaLife · Ginástica Laboral · ${periodLabel}`, L, 10);
       return 26;
     }
     pdf.setFontSize(20);
@@ -95,7 +95,7 @@ export function generateExecutiveReport({ result, month, scopeText, labels = {},
   pdf.setTextColor(...deep);
   pdf.setFont("helvetica", "bold");
   pdf.setFontSize(17);
-  pdf.text(monthLabel(month), L, y);
+  pdf.text(periodLabel, L, y);
   y += 6;
   pdf.setTextColor(...muted);
   pdf.setFont("helvetica", "normal");
@@ -285,9 +285,9 @@ export function generateExecutiveReport({ result, month, scopeText, labels = {},
   pdf.setFont("helvetica", "normal");
   pdf.setFontSize(7.5);
   [
-    "Como ler: presença, ausência e falta são percentuais sobre as vagas das aulas aplicadas no mês (uma vaga = um colaborador da lista em uma aula).",
-    "Ausência: marcado como ausente na aula. Falta: não marcado nem como presente nem como ausente. Adesão: colaboradores da lista com ao menos uma presença no mês.",
-    `Aulas aplicadas: aulas fechadas ÷ aulas previstas na agenda do mês. Metas de referência: adesão ${GOALS.adherence}%, aulas aplicadas ${GOALS.applied}%.`,
+    "Como ler: presença, ausência e falta são percentuais sobre as vagas das aulas aplicadas no período (uma vaga = um colaborador da lista em uma aula).",
+    "Ausência: marcado como ausente na aula. Falta: não marcado nem como presente nem como ausente. Adesão: colaboradores da lista com ao menos uma presença no período.",
+    `Aulas aplicadas: aulas fechadas ÷ aulas previstas na agenda do período, contadas até hoje. Metas de referência: adesão ${GOALS.adherence}%, aulas aplicadas ${GOALS.applied}%.`,
   ].forEach((text) => {
     const lines = pdf.splitTextToSize(text, R - L);
     pdf.text(lines, L, y);
