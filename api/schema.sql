@@ -27,7 +27,7 @@ create table if not exists app_user (
   name text not null,
   email text not null unique,
   password_hash text not null,
-  role text not null check (role in ('admin', 'professor', 'client')),
+  role text not null check (role in ('admin', 'professor', 'client', 'coordinator')),
   client_ids text[] not null default '{}',
   active boolean not null default true,
   invitation_token_hash text,

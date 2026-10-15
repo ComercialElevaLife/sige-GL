@@ -66,6 +66,7 @@ const K = {
 };
 const roles = {
   admin: "Administrador",
+  coordinator: "Coordenador ElevaLife",
   professor: "Professor",
   client: "Gestor do cliente",
 };
@@ -121,7 +122,7 @@ const participantQr = (person) => `SIGEGL:${person.clientId}:${person.registrati
 const rate = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : "0%");
 const clientIdsFor = (user) => {
   if (user.role === "admin") return [];
-  if (user.role === "professor")
+  if (user.role === "professor" || user.role === "coordinator")
     return user.clientIds?.length
       ? user.clientIds
       : user.clientId
@@ -134,7 +135,7 @@ const normalizeUser = (user) => {
     const { clientId, clientIds, unitId, ...admin } = user;
     return admin;
   }
-  if (user.role === "professor") {
+  if (user.role === "professor" || user.role === "coordinator") {
     const { clientId, ...professor } = user;
     return { ...professor, clientIds: [...new Set(user.clientIds || (clientId ? [clientId] : []))] };
   }
@@ -925,7 +926,7 @@ function UsersPanel({ users, setUsers, data, token, centralReady }) {
   const selectRole = (role) => setF((current) => ({
     ...current,
     role,
-    clientIds: role === "professor" ? current.clientIds : [],
+    clientIds: role === "professor" || role === "coordinator" ? current.clientIds : [],
     clientId: role === "client" ? current.clientId || current.clientIds[0] || data.clients[0]?.id || "" : "",
     unitIds: role === "client" ? current.unitIds : [],
     sectorIds: role === "client" ? current.sectorIds : [],
@@ -945,8 +946,8 @@ function UsersPanel({ users, setUsers, data, token, centralReady }) {
   }));
   const save = async (e) => {
     e.preventDefault();
-    if (f.role === "professor" && !f.clientIds.length)
-      return setFeedback("Selecione ao menos uma empresa para o professor.");
+    if ((f.role === "professor" || f.role === "coordinator") && !f.clientIds.length)
+      return setFeedback(`Selecione ao menos uma empresa para o ${f.role === "coordinator" ? "coordenador" : "professor"}.`);
     if (f.role === "client" && !f.clientId)
       return setFeedback("Selecione a empresa do usuário cliente.");
     const existing = users.find((user) => user.id === editingId);
@@ -958,7 +959,7 @@ function UsersPanel({ users, setUsers, data, token, centralReady }) {
     };
     const access = f.role === "admin"
       ? {}
-      : f.role === "professor"
+      : f.role === "professor" || f.role === "coordinator"
         ? { clientIds: f.clientIds }
         : { clientId: f.clientId, unitIds: f.unitIds, sectorIds: f.sectorIds };
     try {
@@ -967,7 +968,7 @@ function UsersPanel({ users, setUsers, data, token, centralReady }) {
       if (centralReady && token) {
         const payload = {
           ...base,
-          clientIds: f.role === "admin" ? [] : f.role === "professor" ? f.clientIds : [f.clientId],
+          clientIds: f.role === "admin" ? [] : f.role === "professor" || f.role === "coordinator" ? f.clientIds : [f.clientId],
           unitIds: f.role === "client" ? f.unitIds : [],
           sectorIds: f.role === "client" ? f.sectorIds : [],
           active: existing?.active,
@@ -1023,7 +1024,7 @@ function UsersPanel({ users, setUsers, data, token, centralReady }) {
           <p className="eyebrow">ACESSOS</p>
           <h1>Usuários</h1>
           <p>
-            Administrador: gestão completa. Professor: coleta vinculada.
+            Administrador: gestão completa. Coordenador ElevaLife: acompanha as empresas vinculadas, somente leitura. Professor: coleta vinculada.
             Gestor do cliente: acompanha os indicadores da empresa, de unidades ou de setores específicos, somente leitura.
           </p>
         </div>
@@ -1097,7 +1098,8 @@ function UsersPanel({ users, setUsers, data, token, centralReady }) {
               </select>
             </label>
             {f.role === "admin" && <p className="form-help">Administrador tem acesso a todas as empresas e não possui empresa vinculada.</p>}
-            {f.role === "professor" && <fieldset className="check-list"><legend>Empresas vinculadas</legend>{data.clients.map((client) => <label key={client.id}><input type="checkbox" checked={f.clientIds.includes(client.id)} onChange={() => toggleProfessorClient(client.id)} />{client.name}</label>)}</fieldset>}
+            {(f.role === "professor" || f.role === "coordinator") && <fieldset className="check-list"><legend>Empresas vinculadas</legend>{data.clients.map((client) => <label key={client.id}><input type="checkbox" checked={f.clientIds.includes(client.id)} onChange={() => toggleProfessorClient(client.id)} />{client.name}</label>)}</fieldset>}
+            {f.role === "coordinator" && <p className="form-help">O coordenador acompanha dashboard e relatório executivo das empresas marcadas, somente leitura. Não altera cadastros nem gerencia usuários.</p>}
             {f.role === "client" && <>
               <label>Cliente / empresa<select value={f.clientId} onChange={(e) => changeCompany(e.target.value)}><option value="">Selecione</option>{data.clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label>
               {!!companyUnits.length && <fieldset className="check-list"><legend>Unidades (opcional)</legend>{companyUnits.map((unit) => <label key={unit.id}><input type="checkbox" checked={f.unitIds.includes(unit.id)} onChange={() => toggleScope("unitIds", unit.id)} />{unit.name}</label>)}</fieldset>}
@@ -1802,7 +1804,7 @@ export default function App() {
     };
   }, []);
   useEffect(() => {
-    if (!centralReady || !token || user?.role === "client" || !online) return;
+    if (!centralReady || !token || user?.role === "client" || user?.role === "coordinator" || !online) return;
     window.clearTimeout(syncTimer.current);
     syncTimer.current = window.setTimeout(async () => {
       // Cadastros desatualizados: nada é enviado até o administrador recarregar a versão atual.
@@ -1829,7 +1831,7 @@ export default function App() {
     return () => window.clearTimeout(syncTimer.current);
   }, [data, schedules, classes, attendance, audit, centralReady, token, user, online]);
   useEffect(() => {
-    if (!centralReady || !token || !user || user.role === "client" || !online) return;
+    if (!centralReady || !token || !user || user.role === "client" || user.role === "coordinator" || !online) return;
     flushClasses(token, user.id).catch(() => {});
   }, [centralReady, token, user, online]);
   useEffect(() => {
