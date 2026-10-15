@@ -855,3 +855,40 @@ app.http("classPhoto", {
     }
   },
 });
+
+// Aulas e presenças de um período (base dos indicadores). Cliente e professor só veem as empresas do seu escopo.
+app.http("classList", {
+  methods: ["POST"],
+  authLevel: "anonymous",
+  route: "aulas-lista",
+  handler: async (request) => {
+    try {
+      const body = await request.json();
+      const user = await userFrom(request, body.session);
+      const from = cleanDate(body.from);
+      const to = cleanDate(body.to);
+      if (!from || !to || from >= to) throw new HttpError(400, "Período inválido.");
+      if (new Date(to) - new Date(from) > 370 * 24 * 3600 * 1000) throw new HttpError(400, "Período máximo de 12 meses.");
+      await aulaStore();
+      const scoped = user.role !== "admin";
+      const aulas = await query(
+        `select id, client_id, unit_id, sector_id, location_id, shift, status, closed_at, photo_status
+         from aula
+         where closed_at >= $1 and closed_at < $2 and ($3::boolean = false or client_id = any($4::text[]))
+         order by closed_at
+         limit 5000`,
+        [from, to, scoped, user.clientIds],
+      );
+      const ids = aulas.rows.map((row) => row.id);
+      const presences = ids.length
+        ? await query("select aula_id, person_id, status from presenca where aula_id = any($1::text[])", [ids])
+        : { rows: [] };
+      return json({
+        aulas: aulas.rows.map((r) => ({ id: r.id, clientId: r.client_id, unitId: r.unit_id, sectorId: r.sector_id, locationId: r.location_id, shift: r.shift, status: r.status, closedAt: r.closed_at, photoStatus: r.photo_status })),
+        presencas: presences.rows.map((r) => ({ aulaId: r.aula_id, personId: r.person_id, status: r.status })),
+      });
+    } catch (error) {
+      return configurationError(error);
+    }
+  },
+});

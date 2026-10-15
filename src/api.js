@@ -87,3 +87,8 @@ export const centralClassPhoto = (token, id) => request("/aulas-foto", {
   method: "POST",
   body: JSON.stringify({ id, session: token }),
 });
+
+export const centralClasses = (token, { from, to }) => request("/aulas-lista", {
+  method: "POST",
+  body: JSON.stringify({ from, to, session: token }),
+});
