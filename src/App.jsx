@@ -30,7 +30,8 @@ import { generateExecutiveReport } from "./executiveReport";
 import { checkPersonRow, findRegistrationOwner, registrationKey } from "./registry";
 import { planPeopleImport } from "./importPlan";
 import DashboardView from "./DashboardView";
-import { computeIndicators, currentMonth, monthRange } from "./indicators";
+import { computeIndicators } from "./indicators";
+import { defaultPeriod, periodRange } from "./periods";
 import { plannedClassesForMonth, weekdays } from "./scheduling";
 import {
   centralActivate,
@@ -480,28 +481,35 @@ function Dashboard({ data, schedules, classes, attendance, user, token }) {
     shift: "",
     locationId: "",
   });
-  const [month, setMonth] = useState(currentMonth());
-  const [remote, setRemote] = useState({ aulas: [], presencas: [], loaded: false });
+  const [period, setPeriod] = useState(() => defaultPeriod());
+  const [remote, setRemote] = useState({ aulas: [], presencas: [], truncated: false, key: "" });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
+  const range = useMemo(() => periodRange(period), [period]);
+  const rangeKey = range.error ? `erro:${period.start}:${period.end}` : `${range.from.getTime()}-${range.to.getTime()}`;
+  const ready = !range.error && remote.key === rangeKey;
   useEffect(() => {
     let cancelled = false;
     if (!token) {
       setError("Entre com a sua conta para ver os indicadores.");
       return undefined;
     }
+    if (range.error) {
+      setLoading(false);
+      setError("");
+      return undefined;
+    }
     setLoading(true);
     setError("");
-    const { from, to } = monthRange(month);
-    centralClasses(token, { from, to })
-      .then((response) => !cancelled && setRemote({ aulas: response.aulas || [], presencas: response.presencas || [], loaded: true }))
+    centralClasses(token, { from: range.from.toISOString(), to: range.to.toISOString() })
+      .then((response) => !cancelled && setRemote({ aulas: response.aulas || [], presencas: response.presencas || [], truncated: Boolean(response.truncated), key: rangeKey }))
       .catch((failure) => !cancelled && setError(navigator.onLine ? failure.message || "Falha ao consultar o servidor." : "Sem conexão. Os indicadores precisam de internet."))
       .finally(() => !cancelled && setLoading(false));
     return () => {
       cancelled = true;
     };
-  }, [token, month, attempt]);
+  }, [token, rangeKey, attempt]);
   const inScope = (x) =>
     (user.role === "admin" || permittedClientIds.includes(x.clientId)) &&
     (!filter.clientId || x.clientId === filter.clientId) &&
@@ -510,24 +518,23 @@ function Dashboard({ data, schedules, classes, attendance, user, token }) {
     (!filter.shift || x.shift === filter.shift) &&
     (!filter.locationId || x.locationId === filter.locationId);
   const people = useMemo(() => data.people.filter((x) => x.active !== false && inScope(x)), [data.people, filter, user]);
+  // Sem dados do período atual (carregando ou erro), calcula com listas vazias: os gráficos aparecem zerados em vez de sumir.
   const result = useMemo(
     () =>
-      remote.loaded
-        ? computeIndicators({
-            aulas: remote.aulas,
-            presencas: remote.presencas,
-            people,
-            schedules,
-            filter: { ...filter, clientId: user.role === "client" ? permittedClientIds[0] : filter.clientId },
-            month,
-            labels: { clients: data.clients, units: data.units, sectors: data.sectors },
-          })
-        : null,
-    [remote, people, schedules, filter, month, data.clients, data.units, data.sectors],
+      computeIndicators({
+        aulas: ready ? remote.aulas : [],
+        presencas: ready ? remote.presencas : [],
+        people,
+        schedules,
+        filter: { ...filter, clientId: user.role === "client" ? permittedClientIds[0] : filter.clientId },
+        period: range.error ? periodRange(defaultPeriod()) : range,
+        labels: { clients: data.clients, units: data.units, sectors: data.sectors },
+      }),
+    [remote, ready, people, schedules, filter, range, data.clients, data.units, data.sectors],
   );
   // Relatório em PDF executivo: mesmos indicadores da tela, sem listas aula a aula nem pessoa a pessoa.
   const downloadPdf = () => {
-    if (!result?.hasData) return window.alert("Não há aulas registradas neste mês para gerar o relatório.");
+    if (!ready || !result.hasData) return window.alert("Não há aulas registradas neste período para gerar o relatório.");
     try {
       const scopeText = [
         filter.clientId && nameOf(data.clients, filter.clientId),
@@ -536,8 +543,8 @@ function Dashboard({ data, schedules, classes, attendance, user, token }) {
         filter.shift,
         filter.locationId && nameOf(data.locations, filter.locationId),
       ].filter(Boolean).join(" · ") || "Visão geral";
-      const pdf = generateExecutiveReport({ result, month, scopeText, labels: { sectors: data.sectors } });
-      pdf.save(`relatorio-executivo-gl-${month}.pdf`);
+      const pdf = generateExecutiveReport({ result, periodLabel: range.label, scopeText, labels: { sectors: data.sectors } });
+      pdf.save(`relatorio-executivo-gl-${range.fileKey}.pdf`);
     } catch (failure) {
       window.alert("Não foi possível gerar o PDF. Atualize a página e tente novamente.");
     }
@@ -545,9 +552,11 @@ function Dashboard({ data, schedules, classes, attendance, user, token }) {
   return (
     <DashboardView
       result={result}
-      month={month}
-      onMonth={setMonth}
-      canNext={month < currentMonth()}
+      period={period}
+      onPeriod={setPeriod}
+      range={range}
+      ready={ready}
+      truncated={ready && remote.truncated}
       loading={loading}
       error={error}
       onRetry={() => setAttempt((n) => n + 1)}
