@@ -28,6 +28,7 @@ import { verifyFace } from "./biometrics";
 import { queueClass, flushClasses, pendingClasses } from "./classOutbox";
 import { generateExecutiveReport } from "./executiveReport";
 import { checkPersonRow, findRegistrationOwner, registrationKey } from "./registry";
+import { planPeopleImport } from "./importPlan";
 import DashboardView from "./DashboardView";
 import { computeIndicators, currentMonth, monthRange } from "./indicators";
 import { plannedClassesForMonth, weekdays } from "./scheduling";
@@ -574,7 +575,7 @@ function ExcelImport({ data, setData, setUsers, token, centralReady }) {
     people: { label: "Colaboradores", headers: ["Nome", "Matrícula ou CPF", "Empresa", "Unidade", "Setor", "Local da aula", "Turno"], example: { Nome: "Maria Silva", "Matrícula ou CPF": "12345", Empresa: "Empresa Exemplo", Unidade: "Unidade Central", Setor: "Administrativo", "Local da aula": "Auditório", Turno: "Administrativo" } },
     professors: { label: "Professores", headers: ["Nome", "E-mail", "Empresas"], example: { Nome: "Nome do professor", "E-mail": "professor@exemplo.com", Empresas: "Empresa Exemplo" } },
   };
-  const [type, setType] = useState("people"), [preview, setPreview] = useState(null), [message, setMessage] = useState("");
+  const [type, setType] = useState("people"), [preview, setPreview] = useState(null), [message, setMessage] = useState(""), [createMissing, setCreateMissing] = useState(false);
   const normalize = (value) => String(value || "").trim().toLocaleLowerCase("pt-BR");
   const cell = (row, name) => row[Object.keys(row).find((key) => normalize(key) === normalize(name))] ?? "";
   const template = () => {
@@ -586,6 +587,8 @@ function ExcelImport({ data, setData, setUsers, token, centralReady }) {
     const file = event.target.files?.[0]; if (!file) return;
     const book = XLSX.read(await file.arrayBuffer(), { type: "array" });
     const rows = XLSX.utils.sheet_to_json(book.Sheets[book.SheetNames[0]], { defval: "" });
+    // Colaboradores: a conferência é refeita na tela (opção de criar unidade, setor e local que faltam).
+    if (type === "people") { setPreview({ raw: rows, file: file.name }); event.target.value = ""; return; }
     const seen = new Map();
     const checked = rows.map((row, index) => {
       const company = data.clients.find((item) => normalize(item.name) === normalize(cell(row, "Empresa")));
@@ -609,9 +612,20 @@ function ExcelImport({ data, setData, setUsers, token, centralReady }) {
     });
     setPreview({ rows: checked, file: file.name }); event.target.value = "";
   };
+  const view = useMemo(() => {
+    if (!preview) return null;
+    if (!preview.raw) return { rows: preview.rows, ready: preview.rows.filter((item) => !item.error).length, rejected: preview.rows.filter((item) => item.error).length, created: { units: [], sectors: [], locations: [] }, file: preview.file };
+    return { ...planPeopleImport({ rows: preview.raw, cell, data, createMissing, newid }), file: preview.file };
+  }, [preview, createMissing, data]);
+  const downloadRejected = () => {
+    const rejected = view.rows.filter((item) => item.error).map((item) => ({ Linha: item.index, Motivo: item.error, ...item.row }));
+    const book = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet(rejected), "Linhas para revisar");
+    XLSX.writeFile(book, `linhas-para-revisar-${new Date().toISOString().slice(0, 10)}.xlsx`);
+  };
   const apply = async () => {
-    const valid = preview.rows.filter((item) => !item.error); if (!valid.length) return;
-    const next = { ...data, clients: [...data.clients], units: [...data.units], locations: [...data.locations], people: [...data.people] };
+    const valid = view.rows.filter((item) => !item.error); if (!valid.length) return;
+    const next = { ...data, clients: [...data.clients], units: [...data.units, ...view.created.units], sectors: [...data.sectors, ...view.created.sectors], locations: [...data.locations, ...view.created.locations], people: [...data.people] };
     const findClient = (name) => next.clients.find((item) => normalize(item.name) === normalize(name));
     valid.forEach((item) => {
       const row = item.row;
@@ -627,9 +641,10 @@ function ExcelImport({ data, setData, setUsers, token, centralReady }) {
       }));
       setUsers((current) => [...current, ...imported.map((item) => normalizeUser(item.user))]);
     } else setData(next);
-    setMessage(`${valid.length} registro(s) importado(s) com sucesso.`); setPreview(null);
+    const made = [["unidade(s)", view.created.units.length], ["setor(es)", view.created.sectors.length], ["local(is) de aula", view.created.locations.length]].filter(([, count]) => count).map(([label, count]) => `${count} ${label}`);
+    setMessage(`${valid.length} registro(s) importado(s) com sucesso.${made.length ? ` Também criado(s): ${made.join(", ")}.` : ""}`); setPreview(null);
   };
-  return <section className="directory"><section className="heading"><div><p className="eyebrow">IMPORTAÇÃO ASSISTIDA</p><h1>Importar planilha</h1><p>Baixe o modelo, preencha e confira todos os dados antes de gravar.</p></div></section><section className="card" style={{ padding: 22 }}><div className="form"><label>O que deseja importar?<select value={type} onChange={(e) => { setType(e.target.value); setPreview(null); }}>{Object.entries(models).map(([key, model]) => <option key={key} value={key}>{model.label}</option>)}</select></label><button className="secondary" onClick={template}><Download size={17}/> Baixar modelo</button><label>Escolha a planilha preenchida<input type="file" accept=".xlsx,.xls,.csv" onChange={analyze}/></label></div>{message && <p className="notice">{message}</p>}</section>{preview && <Modal title="Conferir importação" onClose={() => setPreview(null)}><p className="muted">Arquivo: {preview.file}. Linhas verdes serão importadas; linhas com aviso ficam de fora.</p><div className="participants">{preview.rows.map((item) => <article className="participant" key={item.index}><div className="avatar">{item.index}</div><div className="person"><strong>{item.error ? "Revisar linha" : "Pronta para importar"}</strong><span>{item.error || Object.values(item.row).filter(Boolean).join(" · ")}</span></div></article>)}</div><button className="primary full" onClick={apply}><Upload size={17}/> Importar linhas corretas</button></Modal>}</section>;
+  return <section className="directory"><section className="heading"><div><p className="eyebrow">IMPORTAÇÃO ASSISTIDA</p><h1>Importar planilha</h1><p>Baixe o modelo, preencha e confira todos os dados antes de gravar.</p></div></section><section className="card" style={{ padding: 22 }}><div className="form"><label>O que deseja importar?<select value={type} onChange={(e) => { setType(e.target.value); setPreview(null); }}>{Object.entries(models).map(([key, model]) => <option key={key} value={key}>{model.label}</option>)}</select></label><button className="secondary" onClick={template}><Download size={17}/> Baixar modelo</button><label>Escolha a planilha preenchida<input type="file" accept=".xlsx,.xls,.csv" onChange={analyze}/></label></div>{message && <p className="notice">{message}</p>}</section>{view && <Modal title="Conferir importação" onClose={() => setPreview(null)}><p className="muted">Arquivo: {view.file}. {view.ready} linha(s) pronta(s) e {view.rejected} para revisar. Linhas com aviso ficam de fora e nada é gravado até você confirmar.</p>{type === "people" && <label className="check-inline"><input type="checkbox" checked={createMissing} onChange={(e) => setCreateMissing(e.target.checked)} /> Criar unidades, setores e locais de aula que ainda não existem (a empresa precisa estar cadastrada)</label>}{(view.created.units.length + view.created.sectors.length + view.created.locations.length) > 0 && <div className="notice"><strong>Será criado ao importar:</strong>{[["Unidades", view.created.units], ["Setores", view.created.sectors], ["Locais de aula", view.created.locations]].filter(([, list]) => list.length).map(([label, list]) => <p key={label}>{label} ({list.length}): {list.slice(0, 12).map((item) => item.name).join(", ")}{list.length > 12 ? ` e mais ${list.length - 12}` : ""}</p>)}</div>}{view.rejected > 0 && <button className="secondary" onClick={downloadRejected}><Download size={17}/> Baixar linhas para revisar</button>}<div className="participants">{[...view.rows.filter((item) => item.error).slice(0, 200), ...view.rows.filter((item) => !item.error).slice(0, 30)].map((item) => <article className="participant" key={item.index}><div className="avatar">{item.index}</div><div className="person"><strong>{item.error ? "Revisar linha" : "Pronta para importar"}</strong><span>{item.error || Object.values(item.row).filter(Boolean).join(" · ")}</span></div></article>)}{(Math.max(0, view.rejected - 200) + Math.max(0, view.ready - 30)) > 0 && <p className="muted">A lista mostra até 200 linhas para revisar e 30 prontas; o arquivo para revisar traz todas as recusadas.</p>}</div><button className="primary full" onClick={apply} disabled={!view.ready}><Upload size={17}/> Importar {view.ready} linha(s) correta(s)</button></Modal>}</section>;
 }
 
 function ShiftSettings({ data, setData }) {
